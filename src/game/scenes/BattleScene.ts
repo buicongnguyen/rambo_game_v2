@@ -16,7 +16,77 @@ import type {
   SessionSnapshot,
   StageConfig,
   StageThemeId,
+  WeaponKind,
 } from '../types';
+
+interface WeaponSpec {
+  kind: WeaponKind;
+  label: string;
+  tint: number;
+  fireRate: number;
+  bulletSpeed: number;
+  damage: number;
+  maxDistance: number;
+  spread: number;
+  pellets: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+const WEAPONS: Record<WeaponKind, WeaponSpec> = {
+  rifle: {
+    kind: 'rifle',
+    label: 'Rifle',
+    tint: 0xefb648,
+    fireRate: 190,
+    bulletSpeed: 390,
+    damage: 32,
+    maxDistance: 500,
+    spread: 0,
+    pellets: 1,
+    scaleX: 1.8,
+    scaleY: 1.25,
+  },
+  shotgun: {
+    kind: 'shotgun',
+    label: 'Shotgun',
+    tint: 0xffd08a,
+    fireRate: 500,
+    bulletSpeed: 430,
+    damage: 44,
+    maxDistance: 700,
+    spread: 0.24,
+    pellets: 5,
+    scaleX: 1.65,
+    scaleY: 1.25,
+  },
+  flame: {
+    kind: 'flame',
+    label: 'Fire Gun',
+    tint: 0xff6b2d,
+    fireRate: 95,
+    bulletSpeed: 340,
+    damage: 24,
+    maxDistance: 520,
+    spread: 0.12,
+    pellets: 4,
+    scaleX: 1.95,
+    scaleY: 1.7,
+  },
+  launcher: {
+    kind: 'launcher',
+    label: 'Launcher',
+    tint: 0x9cf5f3,
+    fireRate: 720,
+    bulletSpeed: 360,
+    damage: 135,
+    maxDistance: 980,
+    spread: 0,
+    pellets: 1,
+    scaleX: 2.35,
+    scaleY: 1.65,
+  },
+};
 
 interface PlayerUnit {
   id: 1 | 2;
@@ -41,6 +111,8 @@ interface PlayerUnit {
   jumpUntil: number;
   fireVisualUntil: number;
   contactReadyAt: number;
+  weaponIndex: number;
+  weapons: WeaponKind[];
   aim: Phaser.Math.Vector2;
   jumpVector: Phaser.Math.Vector2;
   virtualControlId?: 1 | 2;
@@ -95,6 +167,12 @@ interface EncounterState {
   remaining: number;
 }
 
+interface SpawnDoor {
+  x: number;
+  y: number;
+  house: Phaser.GameObjects.Rectangle;
+}
+
 export class BattleScene extends Phaser.Scene {
   private readonly director: GameDirector;
   private readonly pushHud: (snapshot: HudSnapshot) => void;
@@ -117,7 +195,9 @@ export class BattleScene extends Phaser.Scene {
   private bossGroup?: Phaser.Physics.Arcade.Group;
   private playerBullets?: Phaser.Physics.Arcade.Group;
   private enemyBullets?: Phaser.Physics.Arcade.Group;
+  private weaponPickups?: Phaser.Physics.Arcade.StaticGroup;
   private obstacleBodies: Phaser.GameObjects.Rectangle[] = [];
+  private spawnDoors = new Map<string, SpawnDoor>();
   private cameraTarget?: Phaser.GameObjects.Zone;
   private bannerText?: Phaser.GameObjects.Text;
   private reticleText?: Phaser.GameObjects.Text;
@@ -285,6 +365,7 @@ export class BattleScene extends Phaser.Scene {
     this.allEncountersCleared = false;
     this.bossSpawned = false;
     this.hudTimestamp = 0;
+    this.spawnDoors.clear();
 
     this.children.removeAll();
     this.bannerText = undefined;
@@ -302,12 +383,15 @@ export class BattleScene extends Phaser.Scene {
     this.bossGroup = this.physics.add.group();
     this.playerBullets = this.physics.add.group();
     this.enemyBullets = this.physics.add.group();
+    this.weaponPickups = this.physics.add.staticGroup();
     this.obstacleBodies = [];
     this.cameraTarget = this.add.zone(140, this.stage.worldHeight * 0.5, 4, 4);
     this.cameras.main.startFollow(this.cameraTarget, true, 0.08, 0.08);
     this.cameras.main.setDeadzone(140, 120);
 
     this.createObstacles(this.stage);
+    this.createBattlefieldCover(this.stage);
+    this.createWeaponPickups(this.stage);
     this.createPlayers(snapshot.playerCount);
     this.setupColliders();
     this.createOverlayText();
@@ -370,6 +454,116 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private createBattlefieldCover(stage: StageConfig): void {
+    for (const encounter of stage.encounters) {
+      encounter.enemies.forEach((spawn, index) => {
+        const doorSide = index % 2 === 0 ? -1 : 1;
+        const houseX = spawn.x + doorSide * Phaser.Math.Between(42, 74);
+        const houseY = Phaser.Math.Clamp(spawn.y + Phaser.Math.Between(-28, 28), 90, stage.worldHeight - 90);
+        const concrete = spawn.kind === 'turret' || index % 4 === 3;
+        const house = this.createBlocker(
+          houseX,
+          houseY,
+          concrete ? 82 : 72,
+          concrete ? 58 : 52,
+          concrete ? 0x777f86 : 0x5c4327,
+          concrete ? 0.96 : 0.9,
+          concrete ? 'BUNKER' : 'HUT',
+        );
+        const doorX = houseX - doorSide * ((concrete ? 82 : 72) * 0.52);
+        this.spawnDoors.set(spawn.id, {
+          x: doorX,
+          y: houseY,
+          house,
+        });
+      });
+    }
+
+    const treeCount = stage.theme === 'blacksite' ? 10 : 18;
+    for (let index = 0; index < treeCount; index += 1) {
+      const x = 220 + index * 135 + (index % 3) * 34;
+      if (x > stage.bossTriggerX - 120) {
+        continue;
+      }
+
+      const y = index % 2 === 0
+        ? 120 + (index % 5) * 118
+        : stage.worldHeight - 120 - (index % 5) * 110;
+      this.createTreeCover(x, Phaser.Math.Clamp(y, 80, stage.worldHeight - 80), stage);
+    }
+
+    for (let index = 0; index < 4; index += 1) {
+      const x = 620 + index * 460;
+      const y = index % 2 === 0 ? stage.worldHeight * 0.32 : stage.worldHeight * 0.72;
+      this.createBlocker(x, y, 96, 66, 0x6f777b, 0.98, 'CONCRETE');
+    }
+  }
+
+  private createBlocker(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    tint: number,
+    alpha: number,
+    label?: string,
+  ): Phaser.GameObjects.Rectangle {
+    const rect = this.add.rectangle(x, y, width, height, tint, alpha);
+    rect.setDepth(5);
+    rect.setStrokeStyle(2, 0xf0e1b6, 0.22);
+    this.physics.add.existing(rect, true);
+    this.obstacleBodies.push(rect);
+
+    if (label) {
+      this.add.text(x, y - 5, label, {
+        fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
+        fontSize: '9px',
+        color: '#efe4c3',
+      }).setOrigin(0.5).setDepth(6).setAlpha(0.62);
+    }
+
+    return rect;
+  }
+
+  private createTreeCover(x: number, y: number, stage: StageConfig): void {
+    const trunk = this.add.rectangle(x, y + 10, 34, 42, 0x4c321e, 0.7);
+    trunk.setDepth(5);
+    this.physics.add.existing(trunk, true);
+    this.obstacleBodies.push(trunk);
+
+    const canopyTint = stage.theme === 'river' ? 0x2d6d42 : 0x2f7b35;
+    for (const [offsetX, offsetY, radius] of [[0, -20, 34], [-22, -6, 25], [22, -4, 25], [0, 8, 28]] as const) {
+      this.add.circle(x + offsetX, y + offsetY, radius, canopyTint, 0.78)
+        .setDepth(6)
+        .setStrokeStyle(2, 0x153f1d, 0.4);
+    }
+  }
+
+  private createWeaponPickups(stage: StageConfig): void {
+    const pickups: Array<{ kind: WeaponKind; x: number; y: number }> = [
+      { kind: 'shotgun', x: 390, y: stage.worldHeight * 0.5 },
+      { kind: 'flame', x: Math.floor(stage.worldWidth * 0.42), y: stage.worldHeight * 0.5 - 120 },
+      { kind: 'launcher', x: Math.floor(stage.worldWidth * 0.66), y: stage.worldHeight * 0.5 + 110 },
+    ];
+
+    for (const pickup of pickups) {
+      const spec = WEAPONS[pickup.kind];
+      const crate = this.add.rectangle(pickup.x, pickup.y, 48, 30, spec.tint, 0.92);
+      crate.setDepth(9);
+      crate.setStrokeStyle(2, 0xffffff, 0.34);
+      crate.setData('weaponKind', pickup.kind);
+      this.physics.add.existing(crate, true);
+      this.weaponPickups?.add(crate);
+
+      const label = this.add.text(pickup.x, pickup.y - 2, spec.label.toUpperCase(), {
+        fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
+        fontSize: '8px',
+        color: '#09100b',
+      }).setOrigin(0.5).setDepth(10);
+      crate.setData('labelObject', label);
+    }
+  }
+
   private createPlayers(playerCount: 1 | 2): void {
     for (let index = 0; index < playerCount; index += 1) {
       const playerId = (index + 1) as 1 | 2;
@@ -406,6 +600,8 @@ export class BattleScene extends Phaser.Scene {
         jumpUntil: 0,
         fireVisualUntil: 0,
         contactReadyAt: 0,
+        weaponIndex: 0,
+        weapons: ['rifle'],
         aim: new Phaser.Math.Vector2(1, 0),
         jumpVector: new Phaser.Math.Vector2(1, 0),
         virtualControlId: playerId === 1 ? 1 : undefined,
@@ -460,6 +656,9 @@ export class BattleScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.playerGroup!, this.bossGroup!, (player, boss) => {
       this.handleBossContact(player as Phaser.GameObjects.GameObject, boss as Phaser.GameObjects.GameObject);
+    });
+    this.physics.add.overlap(this.playerGroup!, this.weaponPickups!, (player, pickup) => {
+      this.handleWeaponPickup(player as Phaser.GameObjects.GameObject, pickup as Phaser.GameObjects.GameObject);
     });
   }
 
@@ -545,7 +744,6 @@ export class BattleScene extends Phaser.Scene {
 
       const movement = this.getMovementInput(player);
       const wantsFire = this.isActionDown(player, 'fire');
-      const wantsCrouch = this.isActionDown(player, 'crouch');
       const isJumping = time < player.jumpUntil;
 
       if (movement.lengthSq() > 0) {
@@ -567,6 +765,10 @@ export class BattleScene extends Phaser.Scene {
         player.aim.copy(jumpVector);
       }
 
+      if (this.wasActionPressed(player, 'crouch')) {
+        this.switchWeapon(player);
+      }
+
       const nowJumping = time < player.jumpUntil;
       let animation = animationKey('player-idle');
       let speed = player.moveSpeed;
@@ -579,16 +781,7 @@ export class BattleScene extends Phaser.Scene {
         animation = animationKey('player-jump');
       } else {
         player.sprite.setScale(1);
-        if (wantsCrouch) {
-          speed = player.crawlSpeed;
-          if (movement.lengthSq() > 0) {
-            player.sprite.setVelocity(movement.x * speed, movement.y * speed);
-            animation = animationKey('player-crawl');
-          } else {
-            player.sprite.setVelocity(0, 0);
-            animation = animationKey('player-kneel');
-          }
-        } else if (movement.lengthSq() > 0) {
+        if (movement.lengthSq() > 0) {
           speed = wantsFire ? player.walkSpeed : player.moveSpeed;
           player.sprite.setVelocity(movement.x * speed, movement.y * speed);
           animation = wantsFire ? animationKey('player-walk') : animationKey('player-run');
@@ -627,12 +820,12 @@ export class BattleScene extends Phaser.Scene {
     return movement;
   }
 
-  private isActionDown(player: PlayerUnit, action: Extract<GameAction, 'crouch' | 'fire'>): boolean {
+  private isActionDown(player: PlayerUnit, action: Extract<GameAction, 'fire'>): boolean {
     const touchActive = player.virtualControlId ? this.virtualGamepad.isDown(player.virtualControlId, action) : false;
     return player.controls[action].isDown || touchActive;
   }
 
-  private wasActionPressed(player: PlayerUnit, action: Extract<GameAction, 'jump' | 'special'>): boolean {
+  private wasActionPressed(player: PlayerUnit, action: Extract<GameAction, 'crouch' | 'jump' | 'special'>): boolean {
     const keyPressed = Phaser.Input.Keyboard.JustDown(player.controls[action]);
     const touchPressed = player.virtualControlId
       ? this.virtualGamepad.consumeJustPressed(player.virtualControlId, action)
@@ -818,12 +1011,40 @@ export class BattleScene extends Phaser.Scene {
     this.activeEncounterLabel = state.config.label;
     this.showBanner(state.config.label, '#f3d088');
 
-    for (const spawn of state.config.enemies) {
-      this.spawnEnemy(spawn.kind, spawn.id, spawn.x, spawn.y, state.config.id);
-    }
+    state.config.enemies.forEach((spawn, index) => {
+      const door = this.spawnDoors.get(spawn.id);
+      this.time.delayedCall(index * 360, () => {
+        this.spawnEnemy(spawn.kind, spawn.id, door?.x ?? spawn.x, door?.y ?? spawn.y, state.config.id, spawn.x, spawn.y);
+      });
+      if (door) {
+        this.flashSpawnDoor(door);
+      }
+    });
   }
 
-  private spawnEnemy(kind: EnemyKind, id: string, x: number, y: number, encounterId: string): void {
+  private flashSpawnDoor(door: SpawnDoor): void {
+    this.tweens.add({
+      targets: door.house,
+      alpha: 0.55,
+      duration: 120,
+      yoyo: true,
+      repeat: 1,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  private spawnEnemy(
+    kind: EnemyKind,
+    id: string,
+    x: number,
+    y: number,
+    encounterId: string,
+    targetX = x,
+    targetY = y,
+  ): void {
+    if (!this.playing && encounterId !== 'boss-support') {
+      return;
+    }
     const theme = this.stage?.theme ?? 'emerald';
     const sprite = this.physics.add.sprite(x, y, getEnemyTextureKey(theme, kind, 'stand'), 0);
     sprite.setDepth(kind === 'turret' ? 8 : 11);
@@ -854,6 +1075,27 @@ export class BattleScene extends Phaser.Scene {
     sprite.play(animationKey(getEnemyTextureKey(theme, kind, 'stand')));
     this.enemies.push(enemy);
     this.enemyGroup?.add(sprite);
+
+    if (targetX !== x || targetY !== y) {
+      sprite.setAlpha(0.35);
+      const body = sprite.body as Phaser.Physics.Arcade.Body;
+      body.enable = false;
+      this.tweens.add({
+        targets: sprite,
+        x: targetX,
+        y: targetY,
+        alpha: 1,
+        duration: 520,
+        ease: 'Sine.easeOut',
+        onComplete: () => {
+          if (sprite.active) {
+            const activeBody = sprite.body as Phaser.Physics.Arcade.Body;
+            activeBody.enable = true;
+            activeBody.reset(sprite.x, sprite.y);
+          }
+        },
+      });
+    }
   }
 
   private spawnBoss(): void {
@@ -898,16 +1140,45 @@ export class BattleScene extends Phaser.Scene {
 
     direction.normalize();
     player.aim.copy(direction);
+    const weapon = this.getCurrentWeapon(player);
     player.fireVisualUntil = time + 180;
-    this.firePlayerBullet(
-      player.sprite.x + direction.x * 18,
-      player.sprite.y + direction.y * 18,
-      direction,
-      player.bulletSpeed,
-      player.damage,
-      player.tint,
-    );
-    player.nextFireAt = time + player.fireRate;
+    const startX = player.sprite.x + direction.x * 18;
+    const startY = player.sprite.y + direction.y * 18;
+    this.createMuzzleFlash(startX, startY, direction, weapon.tint);
+    const pelletCount = weapon.pellets;
+    for (let pellet = 0; pellet < pelletCount; pellet += 1) {
+      const offset = pelletCount === 1
+        ? 0
+        : Phaser.Math.Linear(-weapon.spread, weapon.spread, pellet / (pelletCount - 1));
+      const pelletDirection = direction.clone().rotate(offset + Phaser.Math.FloatBetween(-weapon.spread * 0.15, weapon.spread * 0.15));
+      this.firePlayerBullet(
+        startX,
+        startY,
+        pelletDirection,
+        weapon.bulletSpeed,
+        weapon.damage,
+        weapon.tint,
+        weapon.maxDistance,
+        weapon.scaleX,
+        weapon.scaleY,
+      );
+    }
+    player.nextFireAt = time + weapon.fireRate;
+  }
+
+  private getCurrentWeapon(player: PlayerUnit): WeaponSpec {
+    return WEAPONS[player.weapons[player.weaponIndex] ?? 'rifle'];
+  }
+
+  private switchWeapon(player: PlayerUnit): void {
+    if (player.weapons.length <= 1) {
+      this.showBanner('Find weapon crates to unlock more guns.', player.accent);
+      return;
+    }
+
+    player.weaponIndex = (player.weaponIndex + 1) % player.weapons.length;
+    this.showBanner(`${player.label} switched to ${this.getCurrentWeapon(player).label}`, player.accent);
+    this.emitHud('live');
   }
 
   private activateBarrage(player: PlayerUnit, time: number): void {
@@ -947,20 +1218,43 @@ export class BattleScene extends Phaser.Scene {
     speed: number,
     damage: number,
     tint: number,
+    maxDistance: number,
+    scaleX: number,
+    scaleY: number,
   ): void {
     const bullet = this.physics.add.image(x, y, 'bullet-shell');
     bullet.setTint(tint);
     bullet.setDepth(16);
-    bullet.setScale(1.9, 1.35);
+    bullet.setScale(scaleX, scaleY);
     bullet.setBlendMode(Phaser.BlendModes.ADD);
     bullet.setData('baseScaleX', bullet.scaleX);
     bullet.setData('baseScaleY', bullet.scaleY);
-    this.configureBulletBody(bullet, direction, speed, 980);
+    this.configureBulletBody(bullet, direction, speed, maxDistance);
     bullet.setRotation(direction.angle());
     bullet.setData('damage', damage);
     bullet.setData('expiry', this.time.now + 2600);
     this.playerBullets?.add(bullet);
-    this.createBulletTracer(x, y, direction, tint, 230, 520);
+    this.createBulletTracer(x, y, direction, tint, Math.min(340, maxDistance * 0.46), 520);
+  }
+
+  private createMuzzleFlash(
+    x: number,
+    y: number,
+    direction: Phaser.Math.Vector2,
+    tint: number,
+  ): void {
+    const flash = this.add.circle(x + direction.x * 8, y + direction.y * 8, 10, tint, 0.72);
+    flash.setDepth(18);
+    flash.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: flash,
+      scale: 1.9,
+      alpha: 0,
+      duration: 90,
+      ease: 'Quad.easeOut',
+      onComplete: () => flash.destroy(),
+    });
   }
 
   private createBulletTracer(
@@ -1014,7 +1308,8 @@ export class BattleScene extends Phaser.Scene {
     bullet.setData('damage', damage);
     bullet.setData('expiry', this.time.now + 2200);
     this.enemyBullets?.add(bullet);
-    this.createBulletTracer(x, y, direction, tint, 90, 260);
+    this.createMuzzleFlash(x, y, direction, tint);
+    this.createBulletTracer(x, y, direction, tint, 180, 360);
   }
 
   private configureBulletBody(
@@ -1112,7 +1407,8 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const damage = Number(bullet.getData('damage') ?? 15);
-    bullet.destroy();
+    this.createHitSpark(enemy.sprite.x, enemy.sprite.y, 0xfff0aa, `-${damage}`);
+    this.dropBullet(bullet);
     this.damageEnemy(enemy, damage);
   }
 
@@ -1124,7 +1420,8 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const damage = Number(bullet.getData('damage') ?? 18);
-    bullet.destroy();
+    this.createHitSpark(boss.sprite.x, boss.sprite.y, 0xff8457, `-${damage}`);
+    this.dropBullet(bullet);
     this.damageBoss(boss, damage);
   }
 
@@ -1136,8 +1433,27 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const damage = Number(bullet.getData('damage') ?? 10);
-    bullet.destroy();
+    this.createHitSpark(player.sprite.x, player.sprite.y, 0xff5b4a);
+    this.dropBullet(bullet);
     this.damagePlayer(player, damage);
+  }
+
+  private handleWeaponPickup(playerObject: Phaser.GameObjects.GameObject, pickupObject: Phaser.GameObjects.GameObject): void {
+    const player = playerObject.getData('actor') as PlayerUnit | undefined;
+    const pickup = pickupObject as Phaser.GameObjects.Rectangle;
+    const weaponKind = pickup.getData('weaponKind') as WeaponKind | undefined;
+    if (!player || !player.alive || !weaponKind || player.weapons.includes(weaponKind)) {
+      return;
+    }
+
+    player.weapons.push(weaponKind);
+    player.weaponIndex = player.weapons.length - 1;
+    const label = pickup.getData('labelObject') as Phaser.GameObjects.Text | undefined;
+    label?.destroy();
+    pickup.destroy();
+
+    this.showBanner(`${player.label} collected ${WEAPONS[weaponKind].label}`, player.accent);
+    this.emitHud('live');
   }
 
   private handleEnemyContact(playerObject: Phaser.GameObjects.GameObject, enemyObject: Phaser.GameObjects.GameObject): void {
@@ -1302,7 +1618,7 @@ export class BattleScene extends Phaser.Scene {
   private destroyBulletObject(bulletObject: Phaser.GameObjects.GameObject): void {
     const bullet = bulletObject as Phaser.Physics.Arcade.Image;
     if (bullet.active) {
-      bullet.destroy();
+      this.dropBullet(bullet);
     }
   }
 
@@ -1379,6 +1695,47 @@ export class BattleScene extends Phaser.Scene {
     bullet.destroy();
   }
 
+  private createHitSpark(x: number, y: number, tint: number, label?: string): void {
+    const spark = this.add.image(x, y, 'blast-circle');
+    spark.setDepth(19);
+    spark.setTint(tint);
+    spark.setAlpha(0.58);
+    spark.setScale(0.11);
+    spark.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: spark,
+      alpha: 0,
+      scale: 0.82,
+      duration: 180,
+      ease: 'Quad.easeOut',
+      onComplete: () => spark.destroy(),
+    });
+
+    if (!label) {
+      return;
+    }
+
+    const text = this.add.text(x, y - 18, label, {
+      fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
+      fontSize: '12px',
+      color: '#fff2c4',
+      stroke: '#24170a',
+      strokeThickness: 3,
+    });
+    text.setOrigin(0.5);
+    text.setDepth(20);
+
+    this.tweens.add({
+      targets: text,
+      y: y - 38,
+      alpha: 0,
+      duration: 360,
+      ease: 'Quad.easeOut',
+      onComplete: () => text.destroy(),
+    });
+  }
+
   private emitHud(phase: HudSnapshot['phase']): void {
     const snapshot = this.director.getSnapshot();
     const stage = this.stage ?? this.getPreviewStage(snapshot);
@@ -1407,6 +1764,8 @@ export class BattleScene extends Phaser.Scene {
         bombs: player.bombs,
         alive: player.alive,
         accent: player.accent,
+        weapon: this.getCurrentWeapon(player).label,
+        weapons: player.weapons.map((weapon) => WEAPONS[weapon].label),
       })),
       boss: this.boss && this.boss.alive
         ? {

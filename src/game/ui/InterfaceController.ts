@@ -77,7 +77,7 @@ export class InterfaceController {
               </div>
               <div class="player-meta">
                 <span>HP ${Math.max(0, Math.ceil(player.health))}/${player.maxHealth}</span>
-                <span>Barrage ${player.bombs}</span>
+                <span>${player.weapon ?? 'Rifle'} / ${player.weapons?.length ?? 1} guns</span>
               </div>
             </article>
           `).join('')}
@@ -142,7 +142,7 @@ export class InterfaceController {
         <ul>
           <li><strong>${CONTROL_SCHEMES[1].callsign}</strong> ${describeControls(CONTROL_SCHEMES[1])}</li>
           <li><strong>${CONTROL_SCHEMES[2].callsign}</strong> ${describeControls(CONTROL_SCHEMES[2])}</li>
-          <li><strong>Mobile</strong> Drag the left stick to move, then use the right buttons to fire, jump, kneel, and trigger barrage.</li>
+          <li><strong>Mobile</strong> Drag the left stick to move, then use the right buttons to fire, jump, change gun, and trigger barrage.</li>
         </ul>
       </article>
       <article class="intel-card">

@@ -39,7 +39,7 @@ export class TouchControlsOverlay {
               <strong>Fire</strong>
             </button>
             <button type="button" class="touch-button" data-action="crouch">
-              <strong>Kneel</strong>
+              <strong>Gun</strong>
             </button>
             <button type="button" class="touch-button touch-button-special" data-action="special">
               <strong>Barrage</strong>
