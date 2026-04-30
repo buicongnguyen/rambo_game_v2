@@ -57,6 +57,7 @@ export class InterfaceController {
       players: [],
     };
 
+    this.hudRoot.dataset.phase = hud.phase;
     this.hudRoot.innerHTML = `
       <div class="hud-block hud-left">
         <div class="mission-chip">

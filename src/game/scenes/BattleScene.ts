@@ -147,6 +147,11 @@ export class BattleScene extends Phaser.Scene {
     this.ensureEffectTextures();
     this.createAnimations();
     this.attachDirector();
+    this.scale.off(Phaser.Scale.Events.RESIZE, this.applyResponsiveCamera, this);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.applyResponsiveCamera, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.applyResponsiveCamera, this);
+    });
 
     const snapshot = this.director.getSnapshot();
     if (snapshot.phase === 'playing') {
@@ -157,7 +162,7 @@ export class BattleScene extends Phaser.Scene {
     this.setupStandby(snapshot);
   }
 
-  update(time: number): void {
+  update(time: number, delta: number): void {
     if (!this.playing || !this.stage) {
       return;
     }
@@ -167,8 +172,8 @@ export class BattleScene extends Phaser.Scene {
     this.updateBoss(time);
     this.updateCameraAnchor();
     this.checkEncounterTriggers();
-    this.cleanupBullets(this.playerBullets, time);
-    this.cleanupBullets(this.enemyBullets, time);
+    this.updateBullets(this.playerBullets, time, delta);
+    this.updateBullets(this.enemyBullets, time, delta);
 
     if (time - this.hudTimestamp > 120) {
       this.hudTimestamp = time;
@@ -231,6 +236,8 @@ export class BattleScene extends Phaser.Scene {
     this.virtualGamepad.resetAll();
     const previewStage = this.getPreviewStage(snapshot);
     this.cameras.main.setBackgroundColor(previewStage.palette.sky);
+    this.cameras.main.setBounds(0, 0, previewStage.worldWidth, previewStage.worldHeight);
+    this.applyResponsiveCamera();
     this.drawBackdrop(previewStage, true);
     this.bannerText = this.add.text(64, 72, previewStage.codename, {
       fontFamily: 'Impact, Haettenschweiler, sans-serif',
@@ -280,10 +287,13 @@ export class BattleScene extends Phaser.Scene {
     this.hudTimestamp = 0;
 
     this.children.removeAll();
+    this.bannerText = undefined;
+    this.reticleText = undefined;
     this.physics.world.colliders.destroy();
     this.physics.resume();
     this.physics.world.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
     this.cameras.main.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
+    this.applyResponsiveCamera();
     this.cameras.main.setBackgroundColor(this.stage.palette.sky);
     this.drawBackdrop(this.stage, false);
 
@@ -309,9 +319,10 @@ export class BattleScene extends Phaser.Scene {
 
   private drawBackdrop(stage: StageConfig, standby: boolean): void {
     const background = this.add.graphics();
+    const drawHeight = Math.max(stage.worldHeight, this.getVisibleWorldHeight());
     background.setDepth(-40);
     background.fillStyle(stage.palette.ground, 1);
-    background.fillRect(0, 0, stage.worldWidth, stage.worldHeight);
+    background.fillRect(0, 0, stage.worldWidth, drawHeight);
 
     background.fillStyle(stage.palette.shadow, 0.26);
     for (let index = 0; index < 20; index += 1) {
@@ -324,12 +335,12 @@ export class BattleScene extends Phaser.Scene {
 
     background.fillStyle(stage.palette.accent, 0.08);
     for (let index = 0; index < 18; index += 1) {
-      background.fillRect(index * 170, 0, 8, stage.worldHeight);
+      background.fillRect(index * 170, 0, 8, drawHeight);
     }
 
     if (stage.palette.water) {
       background.fillStyle(stage.palette.water, 0.82);
-      background.fillRect(stage.worldWidth * 0.33, 0, stage.worldWidth * 0.16, stage.worldHeight);
+      background.fillRect(stage.worldWidth * 0.33, 0, stage.worldWidth * 0.16, drawHeight);
       background.fillStyle(0xffffff, 0.06);
       for (let index = 0; index < 18; index += 1) {
         background.fillRect(stage.worldWidth * 0.33, 40 + index * 52, stage.worldWidth * 0.16, 14);
@@ -338,7 +349,7 @@ export class BattleScene extends Phaser.Scene {
 
     if (standby) {
       background.fillStyle(0x000000, 0.18);
-      background.fillRect(0, 0, stage.worldWidth, stage.worldHeight);
+      background.fillRect(0, 0, stage.worldWidth, drawHeight);
     }
   }
 
@@ -387,8 +398,8 @@ export class BattleScene extends Phaser.Scene {
         crawlSpeed: 92,
         jumpSpeed: 320,
         fireRate: 170,
-        bulletSpeed: 680,
-        damage: 20,
+        bulletSpeed: 420,
+        damage: 55,
         nextFireAt: 0,
         nextSpecialAt: 0,
         jumpReadyAt: 0,
@@ -468,6 +479,60 @@ export class BattleScene extends Phaser.Scene {
       wordWrap: { width: 520 },
     }).setScrollFactor(0).setDepth(60);
     this.reticleText.setAlpha(0.92);
+    this.layoutOverlayText();
+
+    this.scale.off(Phaser.Scale.Events.RESIZE, this.layoutOverlayText, this);
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.layoutOverlayText, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.layoutOverlayText, this);
+    });
+  }
+
+  private layoutOverlayText(): void {
+    if (!this.bannerText?.active || !this.reticleText?.active) {
+      return;
+    }
+
+    const compact = this.scale.width <= 900;
+    const x = compact ? 14 : 36;
+    const bannerY = compact ? 74 : 28;
+    const reticleY = compact ? 110 : 72;
+    const wrapWidth = compact
+      ? Math.max(220, Math.min(this.scale.width - 28, 520))
+      : 520;
+
+    this.bannerText.setPosition(x, bannerY);
+    this.bannerText.setFontSize(compact ? '24px' : '34px');
+    this.bannerText.setWordWrapWidth(wrapWidth);
+
+    this.reticleText.setPosition(x, reticleY);
+    this.reticleText.setFontSize(compact ? '14px' : '15px');
+    this.reticleText.setWordWrapWidth(wrapWidth);
+  }
+
+  private applyResponsiveCamera(): void {
+    const width = Math.max(1, this.scale.width);
+    const height = Math.max(1, this.scale.height);
+    const portrait = height > width;
+    const targetWidth = portrait ? 1000 : 1100;
+    const minZoom = portrait ? 0.44 : 0.72;
+    const zoom = width > 960 && height > 620
+      ? 1
+      : Phaser.Math.Clamp(width / targetWidth, minZoom, 1);
+
+    this.cameras.main.setZoom(zoom);
+    const stage = this.stage ?? this.director.getSnapshot().currentStage;
+    this.cameras.main.setBounds(
+      0,
+      0,
+      stage.worldWidth,
+      Math.max(stage.worldHeight, this.getVisibleWorldHeight(zoom)),
+    );
+    this.layoutOverlayText();
+  }
+
+  private getVisibleWorldHeight(zoom = this.cameras.main.zoom): number {
+    return Math.max(1, this.scale.height) / Math.max(0.1, zoom);
   }
 
   private updatePlayers(time: number): void {
@@ -595,9 +660,9 @@ export class BattleScene extends Phaser.Scene {
       if (enemy.kind === 'turret') {
         enemy.sprite.setVelocity(0, 0);
       } else {
-        const desiredRange = enemy.kind === 'rocketeer' ? 320 : 240;
-        const advance = distance > desiredRange ? 1 : distance < desiredRange * 0.72 ? -0.6 : 0;
-        const strafe = Math.sin(time / 360 + enemy.behaviorOffset) * 0.45;
+        const desiredRange = enemy.kind === 'rocketeer' ? 280 : 190;
+        const advance = distance > desiredRange ? 0.72 : distance < desiredRange * 0.45 ? -0.25 : 0;
+        const strafe = Math.sin(time / 520 + enemy.behaviorOffset) * 0.28;
         const side = new Phaser.Math.Vector2(-direction.y, direction.x).scale(strafe);
         const move = direction.clone().scale(advance).add(side);
         if (move.lengthSq() > 0) {
@@ -773,7 +838,7 @@ export class BattleScene extends Phaser.Scene {
       health: kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
       maxHealth: kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
       alive: true,
-      moveSpeed: kind === 'rocketeer' ? 76 : kind === 'turret' ? 0 : 105,
+      moveSpeed: kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
       fireRate: kind === 'rocketeer' ? 1400 : kind === 'turret' ? 1050 : 900,
       bulletSpeed: kind === 'rocketeer' ? 265 : kind === 'turret' ? 340 : 300,
       damage: kind === 'rocketeer' ? 18 : kind === 'turret' ? 12 : 10,
@@ -825,10 +890,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private firePlayerWeapon(player: PlayerUnit, time: number): void {
-    const target = this.closestEnemyOrBoss(player.sprite.x, player.sprite.y);
-    const direction = target
-      ? new Phaser.Math.Vector2(target.x - player.sprite.x, target.y - player.sprite.y)
-      : player.aim.clone();
+    const direction = player.aim.clone();
 
     if (direction.lengthSq() === 0) {
       direction.set(1, 0);
@@ -889,11 +951,47 @@ export class BattleScene extends Phaser.Scene {
     const bullet = this.physics.add.image(x, y, 'bullet-shell');
     bullet.setTint(tint);
     bullet.setDepth(16);
-    bullet.setVelocity(direction.x * speed, direction.y * speed);
+    bullet.setScale(1.9, 1.35);
+    bullet.setBlendMode(Phaser.BlendModes.ADD);
+    bullet.setData('baseScaleX', bullet.scaleX);
+    bullet.setData('baseScaleY', bullet.scaleY);
+    this.configureBulletBody(bullet, direction, speed, 980);
     bullet.setRotation(direction.angle());
     bullet.setData('damage', damage);
-    bullet.setData('expiry', this.time.now + 1200);
+    bullet.setData('expiry', this.time.now + 2600);
     this.playerBullets?.add(bullet);
+    this.createBulletTracer(x, y, direction, tint, 230, 520);
+  }
+
+  private createBulletTracer(
+    x: number,
+    y: number,
+    direction: Phaser.Math.Vector2,
+    tint: number,
+    distance: number,
+    duration: number,
+  ): void {
+    const tracer = this.add.rectangle(
+      x - direction.x * 8,
+      y - direction.y * 8,
+      28,
+      5,
+      tint,
+      0.55,
+    );
+    tracer.setDepth(15);
+    tracer.setRotation(direction.angle());
+    tracer.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: tracer,
+      x: x + direction.x * distance,
+      y: y + direction.y * distance,
+      alpha: 0,
+      duration,
+      ease: 'Quad.easeOut',
+      onComplete: () => tracer.destroy(),
+    });
   }
 
   private fireEnemyBullet(
@@ -907,11 +1005,35 @@ export class BattleScene extends Phaser.Scene {
     const bullet = this.physics.add.image(x, y, 'bullet-shell');
     bullet.setTint(tint);
     bullet.setDepth(15);
-    bullet.setVelocity(direction.x * speed, direction.y * speed);
+    bullet.setScale(1.45, 1.15);
+    bullet.setBlendMode(Phaser.BlendModes.ADD);
+    bullet.setData('baseScaleX', bullet.scaleX);
+    bullet.setData('baseScaleY', bullet.scaleY);
+    this.configureBulletBody(bullet, direction, speed, 720);
     bullet.setRotation(direction.angle());
     bullet.setData('damage', damage);
-    bullet.setData('expiry', this.time.now + 1400);
+    bullet.setData('expiry', this.time.now + 2200);
     this.enemyBullets?.add(bullet);
+    this.createBulletTracer(x, y, direction, tint, 90, 260);
+  }
+
+  private configureBulletBody(
+    bullet: Phaser.Physics.Arcade.Image,
+    direction: Phaser.Math.Vector2,
+    speed: number,
+    maxDistance: number,
+  ): void {
+    const body = bullet.body as Phaser.Physics.Arcade.Body;
+    body.setAllowGravity(false);
+    body.setSize(10, 5);
+    body.setOffset((bullet.width - 10) * 0.5, (bullet.height - 5) * 0.5);
+    body.setVelocity(0, 0);
+    bullet.setData('originX', bullet.x);
+    bullet.setData('originY', bullet.y);
+    bullet.setData('velocityX', direction.x * speed);
+    bullet.setData('velocityY', direction.y * speed);
+    bullet.setData('maxDistance', maxDistance);
+    bullet.setData('dropStartDistance', maxDistance * 0.78);
   }
 
   private fireBossPattern(boss: BossUnit, baseAngle: number): void {
@@ -1059,7 +1181,19 @@ export class BattleScene extends Phaser.Scene {
     }
 
     enemy.alive = false;
-    enemy.sprite.destroy();
+    enemy.sprite.disableBody(false, false);
+    enemy.sprite.setVelocity(0, 0);
+    enemy.sprite.setDepth(9);
+    this.tweens.killTweensOf(enemy.sprite);
+    this.tweens.add({
+      targets: enemy.sprite,
+      alpha: 0,
+      scale: 0.72,
+      angle: enemy.sprite.angle + 18,
+      duration: 420,
+      ease: 'Quad.easeOut',
+      onComplete: () => enemy.sprite.destroy(),
+    });
     this.director.addScore(enemy.kind === 'turret' ? 180 : enemy.kind === 'rocketeer' ? 140 : 100);
 
     const encounter = this.encounterStates.find((state) => state.config.id === enemy.encounterId);
@@ -1165,40 +1299,6 @@ export class BattleScene extends Phaser.Scene {
     return best;
   }
 
-  private closestEnemyOrBoss(x: number, y: number): { x: number; y: number } | undefined {
-    let bestX = 0;
-    let bestY = 0;
-    let bestDistance = Number.POSITIVE_INFINITY;
-
-    for (const enemy of this.enemies) {
-      if (!enemy.alive) {
-        continue;
-      }
-
-      const distance = Phaser.Math.Distance.Squared(x, y, enemy.sprite.x, enemy.sprite.y);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestX = enemy.sprite.x;
-        bestY = enemy.sprite.y;
-      }
-    }
-
-    if (this.boss && this.boss.alive) {
-      const distance = Phaser.Math.Distance.Squared(x, y, this.boss.sprite.x, this.boss.sprite.y);
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestX = this.boss.sprite.x;
-        bestY = this.boss.sprite.y;
-      }
-    }
-
-    if (bestDistance > 620 * 620) {
-      return undefined;
-    }
-
-    return { x: bestX, y: bestY };
-  }
-
   private destroyBulletObject(bulletObject: Phaser.GameObjects.GameObject): void {
     const bullet = bulletObject as Phaser.Physics.Arcade.Image;
     if (bullet.active) {
@@ -1206,18 +1306,77 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private cleanupBullets(group: Phaser.Physics.Arcade.Group | undefined, time: number): void {
+  private updateBullets(group: Phaser.Physics.Arcade.Group | undefined, time: number, delta: number): void {
     if (!group) {
       return;
     }
 
     for (const child of group.getChildren()) {
       const bullet = child as Phaser.Physics.Arcade.Image;
+      if (!bullet.active) {
+        continue;
+      }
+
       const expiry = Number(bullet.getData('expiry') ?? 0);
-      if (time > expiry || !Phaser.Geom.Rectangle.Overlaps(this.physics.world.bounds, bullet.getBounds())) {
-        bullet.destroy();
+      const velocityX = Number(bullet.getData('velocityX') ?? 0);
+      const velocityY = Number(bullet.getData('velocityY') ?? 0);
+      const originX = Number(bullet.getData('originX') ?? bullet.x);
+      const originY = Number(bullet.getData('originY') ?? bullet.y);
+      const maxDistance = Number(bullet.getData('maxDistance') ?? 700);
+      const dropStartDistance = Number(bullet.getData('dropStartDistance') ?? maxDistance * 0.78);
+      const seconds = Math.min(delta, 50) / 1000;
+      const nextX = bullet.x + velocityX * seconds;
+      const nextY = bullet.y + velocityY * seconds;
+
+      bullet.setPosition(nextX, nextY);
+      (bullet.body as Phaser.Physics.Arcade.Body).reset(nextX, nextY);
+
+      const traveled = Phaser.Math.Distance.Between(originX, originY, nextX, nextY);
+      if (traveled > dropStartDistance) {
+        const dropProgress = Phaser.Math.Clamp(
+          (traveled - dropStartDistance) / Math.max(1, maxDistance - dropStartDistance),
+          0,
+          1,
+        );
+        bullet.setAlpha(1 - dropProgress * 0.85);
+        bullet.setScale(
+          Number(bullet.getData('baseScaleX') ?? bullet.scaleX) * (1 - dropProgress * 0.45),
+          Number(bullet.getData('baseScaleY') ?? bullet.scaleY) * (1 - dropProgress * 0.65),
+        );
+        bullet.y += dropProgress * 0.9;
+        (bullet.body as Phaser.Physics.Arcade.Body).reset(bullet.x, bullet.y);
+      }
+
+      if (
+        time > expiry
+        || traveled >= maxDistance
+        || !Phaser.Geom.Rectangle.Overlaps(this.physics.world.bounds, bullet.getBounds())
+      ) {
+        this.dropBullet(bullet);
       }
     }
+  }
+
+  private dropBullet(bullet: Phaser.Physics.Arcade.Image): void {
+    if (!bullet.active) {
+      return;
+    }
+
+    const puff = this.add.image(bullet.x, bullet.y + 4, 'blast-circle');
+    puff.setDepth(14);
+    puff.setTint(0xead8a2);
+    puff.setAlpha(0.22);
+    puff.setScale(0.08);
+    this.tweens.add({
+      targets: puff,
+      alpha: 0,
+      scale: 0.34,
+      duration: 160,
+      ease: 'Quad.easeOut',
+      onComplete: () => puff.destroy(),
+    });
+
+    bullet.destroy();
   }
 
   private emitHud(phase: HudSnapshot['phase']): void {
