@@ -37,6 +37,8 @@ interface WeaponSpec {
   scaleY: number;
   splashRadius?: number;
   splashDamage?: number;
+  pierceCount?: number;
+  beamWidth?: number;
 }
 
 const WEAPONS: Record<WeaponKind, WeaponSpec> = {
@@ -126,6 +128,7 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     pellets: 1,
     scaleX: 2.8,
     scaleY: 1.05,
+    pierceCount: 4,
   },
   explosiveArrow: {
     kind: 'explosiveArrow',
@@ -145,6 +148,44 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     scaleY: 1.35,
     splashRadius: 170,
     splashDamage: 105,
+  },
+  missile: {
+    kind: 'missile',
+    label: 'Hand Missile',
+    shortLabel: 'MSL',
+    tint: 0xffb35c,
+    fireRate: 860,
+    bulletSpeed: 300,
+    damage: 105,
+    maxDistance: 960,
+    maxAmmo: 6,
+    pickupAmmo: 3,
+    ammoCost: 1,
+    spread: 0,
+    pellets: 1,
+    scaleX: 2.7,
+    scaleY: 1.75,
+    splashRadius: 230,
+    splashDamage: 150,
+  },
+  laser: {
+    kind: 'laser',
+    label: 'Laser Gun',
+    shortLabel: 'LSR',
+    tint: 0x71f7ff,
+    fireRate: 620,
+    bulletSpeed: 0,
+    damage: 130,
+    maxDistance: 1180,
+    maxAmmo: 20,
+    pickupAmmo: 10,
+    ammoCost: 1,
+    spread: 0,
+    pellets: 1,
+    scaleX: 1,
+    scaleY: 1,
+    beamWidth: 30,
+    pierceCount: 99,
   },
 };
 
@@ -263,6 +304,7 @@ export class BattleScene extends Phaser.Scene {
   private bannerText?: Phaser.GameObjects.Text;
   private reticleText?: Phaser.GameObjects.Text;
   private objectivePanel?: Phaser.GameObjects.Image;
+  private visionGraphics?: Phaser.GameObjects.Graphics;
 
   constructor(
     director: GameDirector,
@@ -311,6 +353,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.updatePlayers(time);
     this.updateEnemies(time);
+    this.drawEnemyVisionCones();
     this.updateBoss(time);
     this.updateCameraAnchor();
     this.checkEncounterTriggers();
@@ -443,6 +486,7 @@ export class BattleScene extends Phaser.Scene {
     this.bannerText = undefined;
     this.reticleText = undefined;
     this.objectivePanel = undefined;
+    this.visionGraphics = undefined;
     this.physics.world.colliders.destroy();
     this.physics.resume();
     this.physics.world.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
@@ -465,6 +509,8 @@ export class BattleScene extends Phaser.Scene {
     this.createObstacles(this.stage);
     this.createBattlefieldCover(this.stage);
     this.createWeaponPickups(this.stage);
+    this.visionGraphics = this.add.graphics();
+    this.visionGraphics.setDepth(3);
     this.createPlayers(snapshot.playerCount);
     this.setupColliders();
     this.createOverlayText();
@@ -679,7 +725,9 @@ export class BattleScene extends Phaser.Scene {
       { kind: 'flame', x: Math.floor(stage.worldWidth * 0.42), y: stage.worldHeight * 0.5 - 120 },
       { kind: 'sniper', x: Math.floor(stage.worldWidth * 0.52), y: stage.worldHeight * 0.5 + 120 },
       { kind: 'explosiveArrow', x: Math.floor(stage.worldWidth * 0.58), y: stage.worldHeight * 0.5 - 150 },
+      { kind: 'missile', x: Math.floor(stage.worldWidth * 0.62), y: stage.worldHeight * 0.5 - 40 },
       { kind: 'launcher', x: Math.floor(stage.worldWidth * 0.66), y: stage.worldHeight * 0.5 + 110 },
+      { kind: 'laser', x: Math.floor(stage.worldWidth * 0.73), y: stage.worldHeight * 0.5 - 130 },
     ];
 
     for (const pickup of pickups) {
@@ -746,6 +794,8 @@ export class BattleScene extends Phaser.Scene {
           launcher: 0,
           sniper: 0,
           explosiveArrow: 0,
+          missile: 0,
+          laser: 0,
         },
         aim: new Phaser.Math.Vector2(1, 0),
         jumpVector: new Phaser.Math.Vector2(1, 0),
@@ -1113,6 +1163,43 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private drawEnemyVisionCones(): void {
+    if (!this.visionGraphics) {
+      return;
+    }
+
+    this.visionGraphics.clear();
+    for (const enemy of this.enemies) {
+      if (!enemy.alive || !enemy.sprite.active) {
+        continue;
+      }
+
+      const range = enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'turret' ? 420 : 360;
+      const halfAngle = enemy.kind === 'turret' ? 0.3 : 0.42;
+      const angle = enemy.sprite.rotation;
+      const leftX = enemy.sprite.x + Math.cos(angle - halfAngle) * range;
+      const leftY = enemy.sprite.y + Math.sin(angle - halfAngle) * range;
+      const rightX = enemy.sprite.x + Math.cos(angle + halfAngle) * range;
+      const rightY = enemy.sprite.y + Math.sin(angle + halfAngle) * range;
+      const seesPlayer = this.players.some((player) => (
+        player.alive
+        && Phaser.Math.Distance.Between(enemy.sprite.x, enemy.sprite.y, player.sprite.x, player.sprite.y) <= range
+        && this.hasLineOfSight(enemy.sprite.x, enemy.sprite.y, player.sprite.x, player.sprite.y)
+        && Math.abs(Phaser.Math.Angle.Wrap(Phaser.Math.Angle.Between(enemy.sprite.x, enemy.sprite.y, player.sprite.x, player.sprite.y) - angle)) <= halfAngle
+      ));
+
+      this.visionGraphics.fillStyle(seesPlayer ? 0xff6b4a : 0xffd166, seesPlayer ? 0.18 : 0.11);
+      this.visionGraphics.lineStyle(1, seesPlayer ? 0xff8a5c : 0xffd166, seesPlayer ? 0.22 : 0.14);
+      this.visionGraphics.beginPath();
+      this.visionGraphics.moveTo(enemy.sprite.x, enemy.sprite.y);
+      this.visionGraphics.lineTo(leftX, leftY);
+      this.visionGraphics.lineTo(rightX, rightY);
+      this.visionGraphics.closePath();
+      this.visionGraphics.fillPath();
+      this.visionGraphics.strokePath();
+    }
+  }
+
   private updateCameraAnchor(): void {
     if (!this.cameraTarget) {
       return;
@@ -1315,6 +1402,13 @@ export class BattleScene extends Phaser.Scene {
     const startX = player.sprite.x + direction.x * 18;
     const startY = player.sprite.y + direction.y * 18;
     this.createMuzzleFlash(startX, startY, direction, weapon.tint);
+
+    if (weapon.kind === 'laser') {
+      this.fireLaserBeam(startX, startY, direction, weapon);
+      player.nextFireAt = time + weapon.fireRate;
+      return;
+    }
+
     const pelletCount = weapon.pellets;
     for (let pellet = 0; pellet < pelletCount; pellet += 1) {
       const offset = pelletCount === 1
@@ -1333,6 +1427,7 @@ export class BattleScene extends Phaser.Scene {
         weapon.scaleY,
         weapon.splashRadius,
         weapon.splashDamage,
+        weapon.pierceCount,
       );
     }
     player.nextFireAt = time + weapon.fireRate;
@@ -1429,6 +1524,7 @@ export class BattleScene extends Phaser.Scene {
     scaleY: number,
     splashRadius?: number,
     splashDamage?: number,
+    pierceCount?: number,
   ): void {
     const bullet = this.physics.add.image(x, y, 'bullet-shell');
     bullet.setTint(tint);
@@ -1443,9 +1539,89 @@ export class BattleScene extends Phaser.Scene {
     bullet.setData('splashRadius', splashRadius ?? 0);
     bullet.setData('splashDamage', splashDamage ?? 0);
     bullet.setData('splashTint', tint);
+    bullet.setData('pierceRemaining', pierceCount ?? 1);
+    bullet.setData('hitTargets', []);
     bullet.setData('expiry', this.time.now + 2600);
     this.playerBullets?.add(bullet);
     this.createBulletTracer(x, y, direction, tint, Math.min(340, maxDistance * 0.46), 520);
+  }
+
+  private fireLaserBeam(
+    x: number,
+    y: number,
+    direction: Phaser.Math.Vector2,
+    weapon: WeaponSpec,
+  ): void {
+    const endX = x + direction.x * weapon.maxDistance;
+    const endY = y + direction.y * weapon.maxDistance;
+    const beam = this.add.rectangle(
+      x + direction.x * weapon.maxDistance * 0.5,
+      y + direction.y * weapon.maxDistance * 0.5,
+      weapon.maxDistance,
+      weapon.beamWidth ?? 24,
+      weapon.tint,
+      0.62,
+    );
+    beam.setDepth(17);
+    beam.setOrigin(0.5);
+    beam.setRotation(direction.angle());
+    beam.setBlendMode(Phaser.BlendModes.ADD);
+
+    const core = this.add.rectangle(
+      x + direction.x * weapon.maxDistance * 0.5,
+      y + direction.y * weapon.maxDistance * 0.5,
+      weapon.maxDistance,
+      Math.max(6, (weapon.beamWidth ?? 24) * 0.32),
+      0xffffff,
+      0.78,
+    );
+    core.setDepth(18);
+    core.setOrigin(0.5);
+    core.setRotation(direction.angle());
+    core.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: [beam, core],
+      alpha: 0,
+      duration: 170,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        beam.destroy();
+        core.destroy();
+      },
+    });
+
+    this.damageActorsAlongBeam(x, y, endX, endY, weapon);
+  }
+
+  private damageActorsAlongBeam(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+    weapon: WeaponSpec,
+  ): void {
+    const beamWidth = weapon.beamWidth ?? 24;
+
+    for (const enemy of this.enemies) {
+      if (!enemy.alive) {
+        continue;
+      }
+
+      const distance = this.distanceToLineSegment(enemy.sprite.x, enemy.sprite.y, startX, startY, endX, endY);
+      if (distance <= beamWidth * 0.5 + 14) {
+        this.createHitSpark(enemy.sprite.x, enemy.sprite.y, weapon.tint, `-${weapon.damage}`);
+        this.damageEnemy(enemy, weapon.damage);
+      }
+    }
+
+    if (this.boss?.alive) {
+      const distance = this.distanceToLineSegment(this.boss.sprite.x, this.boss.sprite.y, startX, startY, endX, endY);
+      if (distance <= beamWidth * 0.5 + 42) {
+        this.createHitSpark(this.boss.sprite.x, this.boss.sprite.y, weapon.tint, `-${weapon.damage}`);
+        this.damageBoss(this.boss, weapon.damage);
+      }
+    }
   }
 
   private createMuzzleFlash(
@@ -1617,11 +1793,27 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    const hitTargets = (bullet.getData('hitTargets') as string[] | undefined) ?? [];
+    if (hitTargets.includes(enemy.id)) {
+      return;
+    }
+
+    hitTargets.push(enemy.id);
+    bullet.setData('hitTargets', hitTargets);
+
     const damage = Number(bullet.getData('damage') ?? 15);
     const impactX = enemy.sprite.x;
     const impactY = enemy.sprite.y;
     this.createHitSpark(impactX, impactY, 0xfff0aa, `-${damage}`);
     this.damageEnemy(enemy, damage);
+
+    const splashRadius = Number(bullet.getData('splashRadius') ?? 0);
+    const pierceRemaining = Number(bullet.getData('pierceRemaining') ?? 1);
+    if (splashRadius <= 0 && pierceRemaining > 1) {
+      bullet.setData('pierceRemaining', pierceRemaining - 1);
+      return;
+    }
+
     this.resolvePlayerBulletImpact(bullet, impactX, impactY);
   }
 
@@ -1860,6 +2052,27 @@ export class BattleScene extends Phaser.Scene {
     }
 
     return true;
+  }
+
+  private distanceToLineSegment(
+    pointX: number,
+    pointY: number,
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+  ): number {
+    const dx = endX - startX;
+    const dy = endY - startY;
+    const lengthSq = dx * dx + dy * dy;
+    if (lengthSq === 0) {
+      return Phaser.Math.Distance.Between(pointX, pointY, startX, startY);
+    }
+
+    const t = Phaser.Math.Clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSq, 0, 1);
+    const projectionX = startX + t * dx;
+    const projectionY = startY + t * dy;
+    return Phaser.Math.Distance.Between(pointX, pointY, projectionX, projectionY);
   }
 
   private destroyBulletObject(bulletObject: Phaser.GameObjects.GameObject): void {
