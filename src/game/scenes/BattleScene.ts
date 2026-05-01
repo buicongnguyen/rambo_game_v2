@@ -1625,13 +1625,14 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private firePlayerWeapon(player: PlayerUnit, time: number): void {
-    const direction = player.aim.clone();
+    let direction = player.aim.clone();
 
     if (direction.lengthSq() === 0) {
       direction.set(1, 0);
     }
 
     direction.normalize();
+    direction = this.keepShotInsideStage(player.sprite.x, player.sprite.y, direction);
     player.aim.copy(direction);
     const weapon = this.getCurrentWeapon(player);
     if (!this.consumeWeaponAmmo(player, weapon, time)) {
@@ -1681,9 +1682,11 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private findClearBulletStart(x: number, y: number, direction: Phaser.Math.Vector2): { x: number; y: number } {
+    const stage = this.stage ?? this.director.getSnapshot().currentStage;
+    const inset = 14;
     for (let step = 0; step < 8; step += 1) {
-      const candidateX = x + direction.x * step * 14;
-      const candidateY = y + direction.y * step * 14;
+      const candidateX = Phaser.Math.Clamp(x + direction.x * step * 14, inset, stage.worldWidth - inset);
+      const candidateY = Phaser.Math.Clamp(y + direction.y * step * 14, inset, stage.worldHeight - inset);
       const blocked = this.obstacleBodies.some((obstacle) => {
         const bounds = obstacle.getBounds();
         Phaser.Geom.Rectangle.Inflate(bounds, 8, 8);
@@ -1695,7 +1698,38 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
-    return { x, y };
+    return {
+      x: Phaser.Math.Clamp(x, inset, stage.worldWidth - inset),
+      y: Phaser.Math.Clamp(y, inset, stage.worldHeight - inset),
+    };
+  }
+
+  private keepShotInsideStage(
+    x: number,
+    y: number,
+    direction: Phaser.Math.Vector2,
+  ): Phaser.Math.Vector2 {
+    const stage = this.stage ?? this.director.getSnapshot().currentStage;
+    const safe = direction.clone();
+    const edgePadding = 46;
+
+    if (y > stage.worldHeight - edgePadding && safe.y > 0.18) {
+      safe.y = 0;
+    } else if (y < edgePadding && safe.y < -0.18) {
+      safe.y = 0;
+    }
+
+    if (x > stage.worldWidth - edgePadding && safe.x > 0.18) {
+      safe.x = 0;
+    } else if (x < edgePadding && safe.x < -0.18) {
+      safe.x = 0;
+    }
+
+    if (safe.lengthSq() < 0.01) {
+      safe.set(x > stage.worldWidth * 0.5 ? -1 : 1, 0);
+    }
+
+    return safe.normalize();
   }
 
   private getCurrentWeapon(player: PlayerUnit): WeaponSpec {
@@ -2408,11 +2442,16 @@ export class BattleScene extends Phaser.Scene {
       if (
         time > expiry
         || traveled >= maxDistance
-        || !Phaser.Geom.Rectangle.Overlaps(this.physics.world.bounds, bullet.getBounds())
+        || !Phaser.Geom.Rectangle.Overlaps(this.getBulletTravelBounds(), bullet.getBounds())
       ) {
         this.resolvePlayerBulletImpact(bullet, bullet.x, bullet.y);
       }
     }
+  }
+
+  private getBulletTravelBounds(): Phaser.Geom.Rectangle {
+    const stage = this.stage ?? this.director.getSnapshot().currentStage;
+    return new Phaser.Geom.Rectangle(-80, -80, stage.worldWidth + 160, stage.worldHeight + 160);
   }
 
   private getBulletEffectZoneAt(x: number, y: number): BulletEffectZone | undefined {
