@@ -33,7 +33,7 @@ export class TouchControlsOverlay {
         <div class="touch-cluster touch-cluster-right">
           <div class="touch-action-grid">
             <button type="button" class="touch-button" data-action="jump">
-              <strong>Jump</strong>
+              <strong>Jump Roll</strong>
             </button>
             <button type="button" class="touch-button touch-button-fire" data-action="fire">
               <strong>Fire</strong>

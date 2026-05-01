@@ -3,6 +3,7 @@ export type EnemyKind = 'rifleman' | 'rocketeer' | 'turret';
 export type BossKind = 'gunship' | 'barge' | 'tank';
 export type StageThemeId = 'emerald' | 'river' | 'blacksite';
 export type WeaponKind = 'rifle' | 'shotgun' | 'flame' | 'launcher' | 'sniper' | 'explosiveArrow' | 'missile' | 'laser' | 'machineGun';
+export type DifficultyMode = 'easy' | 'normal' | 'hard' | 'extreme';
 
 export interface StagePalette {
   sky: number;
@@ -103,6 +104,7 @@ export interface HudSnapshot {
 export interface SessionSnapshot {
   phase: SessionPhase;
   playerCount: 1 | 2;
+  difficulty: DifficultyMode;
   currentStageIndex: number;
   totalScore: number;
   runSerial: number;

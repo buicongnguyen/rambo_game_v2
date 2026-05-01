@@ -1,6 +1,6 @@
 import { CONTROL_SCHEMES, describeControls } from '../core/ControlScheme';
 import { GameDirector } from '../core/GameDirector';
-import type { HudSnapshot, SessionSnapshot } from '../types';
+import type { DifficultyMode, HudSnapshot, SessionSnapshot } from '../types';
 
 interface InterfaceRoots {
   hudRoot: HTMLElement;
@@ -16,6 +16,7 @@ export class InterfaceController {
   private hudSnapshot: HudSnapshot | null = null;
   private sessionSnapshot: SessionSnapshot;
   private lastHudSignature = '';
+  private selectedDifficulty: DifficultyMode = 'normal';
 
   constructor(roots: InterfaceRoots, director: GameDirector) {
     this.hudRoot = roots.hudRoot;
@@ -121,6 +122,16 @@ export class InterfaceController {
     const overlay = this.getOverlayMarkup(snapshot, stage);
     this.overlayRoot.innerHTML = overlay;
 
+    const difficultyButtons = this.overlayRoot.querySelectorAll<HTMLButtonElement>('button[data-difficulty]');
+    for (const button of difficultyButtons) {
+      const difficulty = this.asDifficultyMode(button.dataset.difficulty);
+      button.classList.toggle('is-selected', difficulty === this.selectedDifficulty);
+      button.addEventListener('click', () => {
+        this.selectedDifficulty = difficulty;
+        this.renderOverlay();
+      });
+    }
+
     const buttons = this.overlayRoot.querySelectorAll<HTMLButtonElement>('button[data-players]');
     for (const button of buttons) {
       button.addEventListener('click', () => {
@@ -130,9 +141,40 @@ export class InterfaceController {
           return;
         }
 
-        this.director.startCampaign(players);
+        this.director.startCampaign(players, this.selectedDifficulty);
       });
     }
+  }
+
+  private asDifficultyMode(value: string | undefined): DifficultyMode {
+    if (value === 'easy' || value === 'hard' || value === 'extreme') {
+      return value;
+    }
+
+    return 'normal';
+  }
+
+  private renderDifficultySelector(): string {
+    const modes: Array<{ id: DifficultyMode; label: string; hp: number }> = [
+      { id: 'easy', label: 'Easy', hp: 800 },
+      { id: 'normal', label: 'Normal', hp: 200 },
+      { id: 'hard', label: 'Hard', hp: 100 },
+      { id: 'extreme', label: 'Extreme', hp: 50 },
+    ];
+
+    return `
+      <div class="difficulty-panel" aria-label="Difficulty">
+        <span>Choose Difficulty</span>
+        <div class="difficulty-grid">
+          ${modes.map((mode) => `
+            <button type="button" class="difficulty-button" data-difficulty="${mode.id}">
+              <strong>${mode.label}</strong>
+              <small>${mode.hp} HP</small>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
   }
 
   private renderIntel(): void {
@@ -149,7 +191,7 @@ export class InterfaceController {
         <ul>
           <li><strong>${CONTROL_SCHEMES[1].callsign}</strong> ${describeControls(CONTROL_SCHEMES[1])}</li>
           <li><strong>${CONTROL_SCHEMES[2].callsign}</strong> ${describeControls(CONTROL_SCHEMES[2])}</li>
-          <li><strong>Mobile</strong> Drag the left stick to move, then use the right buttons to fire, jump, change gun, and call an air-strike bomb.</li>
+          <li><strong>Mobile</strong> Drag the left stick to move, then use the right buttons to fire, jump/roll, change gun, and call an air-strike bomb.</li>
           <li><strong>Air Strike</strong> The old Barrage button is the emergency bomb: it damages enemies in a wide circle and restocks after clearing zones.</li>
         </ul>
       </article>
@@ -199,6 +241,7 @@ export class InterfaceController {
             Your brief points closer to Contra, Ikari Warriors, Mercs, and Metal Slug than the original NES Rambo.
             This prototype turns that idea into a three-stage co-op assault campaign with bosses at the end of every mission.
           </p>
+          ${this.renderDifficultySelector()}
           <div class="overlay-actions">
             <button type="button" class="action-button primary" data-players="1">Start Solo</button>
             <button type="button" class="action-button" data-players="2">Start 2-Player</button>
@@ -242,6 +285,7 @@ export class InterfaceController {
             <strong>${snapshot.totalScore.toLocaleString()}</strong>.
             Restart the campaign and hit the route cleaner.
           </p>
+          ${this.renderDifficultySelector()}
           <div class="overlay-actions">
             <button type="button" class="action-button primary" data-players="1">Retry Solo</button>
             <button type="button" class="action-button" data-players="2">Retry With 2P</button>
@@ -258,6 +302,7 @@ export class InterfaceController {
           Final score: <strong>${snapshot.totalScore.toLocaleString()}</strong>.
           The prototype route is complete. Run it again solo or with a second commando.
         </p>
+        ${this.renderDifficultySelector()}
         <div class="overlay-actions">
           <button type="button" class="action-button primary" data-players="1">Run Solo Again</button>
           <button type="button" class="action-button" data-players="2">Run 2-Player Again</button>

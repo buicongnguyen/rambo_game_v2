@@ -1,5 +1,5 @@
 import { STAGES } from '../data/stages';
-import type { SessionSnapshot, StageConfig } from '../types';
+import type { DifficultyMode, SessionSnapshot, StageConfig } from '../types';
 
 type Listener = (snapshot: SessionSnapshot) => void;
 
@@ -8,6 +8,7 @@ export class GameDirector {
   private readonly listeners = new Set<Listener>();
   private phase: SessionSnapshot['phase'] = 'menu';
   private playerCount: 1 | 2 = 1;
+  private difficulty: DifficultyMode = 'normal';
   private currentStageIndex = 0;
   private totalScore = 0;
   private runSerial = 0;
@@ -35,6 +36,7 @@ export class GameDirector {
     return {
       phase: this.phase,
       playerCount: this.playerCount,
+      difficulty: this.difficulty,
       currentStageIndex: this.currentStageIndex,
       totalScore: this.totalScore,
       runSerial: this.runSerial,
@@ -45,9 +47,10 @@ export class GameDirector {
     };
   }
 
-  startCampaign(playerCount: 1 | 2): void {
+  startCampaign(playerCount: 1 | 2, difficulty: DifficultyMode = this.difficulty): void {
     this.phase = 'playing';
     this.playerCount = playerCount;
+    this.difficulty = difficulty;
     this.currentStageIndex = 0;
     this.totalScore = 0;
     this.completedStages = 0;

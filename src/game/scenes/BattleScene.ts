@@ -10,6 +10,7 @@ import {
 } from '../data/spriteManifest';
 import type {
   BossConfig,
+  DifficultyMode,
   EnemyKind,
   EncounterConfig,
   HudSnapshot,
@@ -244,6 +245,13 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
   },
 };
 
+const DIFFICULTY_HEALTH: Record<DifficultyMode, number> = {
+  easy: 800,
+  normal: 200,
+  hard: 100,
+  extreme: 50,
+};
+
 interface PlayerUnit {
   id: 1 | 2;
   label: string;
@@ -267,6 +275,8 @@ interface PlayerUnit {
   jumpUntil: number;
   fireVisualUntil: number;
   contactReadyAt: number;
+  aimAssistShots: number;
+  rifleAimAssistEvery: number;
   weaponIndex: number;
   weapons: WeaponKind[];
   ammo: Record<WeaponKind, number>;
@@ -585,7 +595,7 @@ export class BattleScene extends Phaser.Scene {
     this.createVehicles(this.stage);
     this.visionGraphics = this.add.graphics();
     this.visionGraphics.setDepth(3);
-    this.createPlayers(snapshot.playerCount);
+    this.createPlayers(snapshot.playerCount, snapshot.difficulty);
     this.setupColliders();
     this.createOverlayText();
 
@@ -1115,7 +1125,8 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private createPlayers(playerCount: 1 | 2): void {
+  private createPlayers(playerCount: 1 | 2, difficulty: DifficultyMode): void {
+    const startingHealth = DIFFICULTY_HEALTH[difficulty] ?? DIFFICULTY_HEALTH.normal;
     for (let index = 0; index < playerCount; index += 1) {
       const playerId = (index + 1) as 1 | 2;
       const scheme = CONTROL_SCHEMES[playerId];
@@ -1134,8 +1145,8 @@ export class BattleScene extends Phaser.Scene {
         accent: scheme.accent,
         tint: scheme.tint,
         sprite,
-        health: 100,
-        maxHealth: 100,
+        health: startingHealth,
+        maxHealth: startingHealth,
         bombs: 3,
         alive: true,
         moveSpeed: 220,
@@ -1151,6 +1162,8 @@ export class BattleScene extends Phaser.Scene {
         jumpUntil: 0,
         fireVisualUntil: 0,
         contactReadyAt: 0,
+        aimAssistShots: 0,
+        rifleAimAssistEvery: Phaser.Math.Between(3, 5),
         weaponIndex: 0,
         weapons: ['rifle'],
         ammo: {
@@ -1356,14 +1369,16 @@ export class BattleScene extends Phaser.Scene {
       }
 
       if (this.wasActionPressed(player, 'jump') && time >= player.jumpReadyAt) {
-        const jumpVector = movement.lengthSq() > 0 ? movement.clone() : player.aim.clone();
+        const jumpVector = movement.lengthSq() > 0
+          ? movement.clone()
+          : this.getEmergencyRollVector(player);
         if (jumpVector.lengthSq() === 0) {
           jumpVector.set(1, 0);
         }
         jumpVector.normalize();
         player.jumpVector.copy(jumpVector);
-        player.jumpUntil = time + 340;
-        player.jumpReadyAt = time + 950;
+        player.jumpUntil = time + 430;
+        player.jumpReadyAt = time + 760;
         player.aim.copy(jumpVector);
       }
 
@@ -1376,10 +1391,10 @@ export class BattleScene extends Phaser.Scene {
       let speed = player.moveSpeed;
 
       if (nowJumping) {
-        const remaining = Math.max(0, player.jumpUntil - time) / 340;
-        const jumpSpeed = player.jumpSpeed * (0.45 + remaining * 0.55);
+        const remaining = Math.max(0, player.jumpUntil - time) / 430;
+        const jumpSpeed = player.jumpSpeed * 1.55 * (0.55 + remaining * 0.45);
         player.sprite.setVelocity(player.jumpVector.x * jumpSpeed, player.jumpVector.y * jumpSpeed);
-        player.sprite.setScale(1.08);
+        player.sprite.setScale(1.12);
         animation = animationKey('player-jump');
       } else {
         player.sprite.setScale(1);
@@ -1464,6 +1479,14 @@ export class BattleScene extends Phaser.Scene {
     if (this.wasActionPressed(player, 'special') && time >= player.nextSpecialAt && player.bombs > 0) {
       this.activateBarrage(player, time);
     }
+  }
+
+  private getEmergencyRollVector(player: PlayerUnit): Phaser.Math.Vector2 {
+    const aim = player.aim.lengthSq() > 0
+      ? player.aim.clone().normalize()
+      : new Phaser.Math.Vector2(1, 0);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    return new Phaser.Math.Vector2(-aim.y * side, aim.x * side).normalize();
   }
 
   private updateJeepAutoShotgun(player: PlayerUnit, vehicle: VehicleUnit, time: number): void {
@@ -2087,13 +2110,14 @@ export class BattleScene extends Phaser.Scene {
     }
 
     direction.normalize();
-    direction = this.keepShotInsideStage(player.sprite.x, player.sprite.y, direction);
-    player.aim.copy(direction);
     const weapon = this.getCurrentWeapon(player);
     if (!this.consumeWeaponAmmo(player, weapon, time)) {
       return;
     }
 
+    direction = this.applyWeaponAimAssist(player, weapon, direction);
+    direction = this.keepShotInsideStage(player.sprite.x, player.sprite.y, direction);
+    player.aim.copy(direction);
     player.fireVisualUntil = time + 180;
     const muzzle = this.findClearBulletStart(
       player.sprite.x + direction.x * 26,
@@ -2134,6 +2158,91 @@ export class BattleScene extends Phaser.Scene {
       );
     }
     player.nextFireAt = time + weapon.fireRate;
+  }
+
+  private applyWeaponAimAssist(
+    player: PlayerUnit,
+    weapon: WeaponSpec,
+    direction: Phaser.Math.Vector2,
+  ): Phaser.Math.Vector2 {
+    const baseDirection = direction.clone().normalize();
+    let thresholdDegrees = 0;
+    let shouldAssist = false;
+
+    if (weapon.kind === 'sniper') {
+      thresholdDegrees = 9;
+      shouldAssist = true;
+    } else if (weapon.kind === 'rifle') {
+      player.aimAssistShots += 1;
+      if (player.aimAssistShots >= player.rifleAimAssistEvery) {
+        thresholdDegrees = 5;
+        shouldAssist = true;
+        player.aimAssistShots = 0;
+        player.rifleAimAssistEvery = Phaser.Math.Between(3, 5);
+      }
+    } else if (weapon.pellets === 1) {
+      thresholdDegrees = 6;
+      shouldAssist = true;
+    }
+
+    if (!shouldAssist) {
+      return baseDirection;
+    }
+
+    const target = this.findAimAssistTarget(player.sprite.x, player.sprite.y, baseDirection, weapon.maxDistance, thresholdDegrees);
+    if (!target) {
+      return baseDirection;
+    }
+
+    return new Phaser.Math.Vector2(target.x - player.sprite.x, target.y - player.sprite.y).normalize();
+  }
+
+  private findAimAssistTarget(
+    x: number,
+    y: number,
+    direction: Phaser.Math.Vector2,
+    maxDistance: number,
+    thresholdDegrees: number,
+  ): { x: number; y: number } | undefined {
+    const threshold = Phaser.Math.DegToRad(thresholdDegrees);
+    const aimAngle = direction.angle();
+    let bestTarget: { x: number; y: number } | undefined;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    const considerTarget = (targetX: number, targetY: number, radius: number): void => {
+      const distance = Phaser.Math.Distance.Between(x, y, targetX, targetY);
+      if (distance > maxDistance + radius || distance < 10) {
+        return;
+      }
+
+      if (!this.hasLineOfSight(x, y, targetX, targetY)) {
+        return;
+      }
+
+      const angle = Phaser.Math.Angle.Between(x, y, targetX, targetY);
+      const angleDiff = Math.abs(Phaser.Math.Angle.Wrap(angle - aimAngle));
+      if (angleDiff > threshold) {
+        return;
+      }
+
+      const score = angleDiff * 10000 + distance;
+      if (score < bestScore) {
+        bestScore = score;
+        bestTarget = { x: targetX, y: targetY };
+      }
+    };
+
+    for (const enemy of this.enemies) {
+      if (enemy.alive) {
+        considerTarget(enemy.sprite.x, enemy.sprite.y, 28);
+      }
+    }
+
+    if (this.boss?.alive) {
+      considerTarget(this.boss.sprite.x, this.boss.sprite.y, 64);
+    }
+
+    return bestTarget;
   }
 
   private findClearBulletStart(x: number, y: number, direction: Phaser.Math.Vector2): { x: number; y: number } {
