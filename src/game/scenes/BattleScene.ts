@@ -71,6 +71,10 @@ interface VehicleUnit {
   maxHp: number;
   speed: number;
   active: boolean;
+  weaponShotsRemaining: number;
+  nextWeaponFireAt: number;
+  salvoShotsRemaining: number;
+  nextSalvoFireAt: number;
 }
 
 const WEAPONS: Record<WeaponKind, WeaponSpec> = {
@@ -415,6 +419,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawEnemyVisionCones();
     this.updateBoss(time);
     this.updateCameraAnchor();
+    this.keepActorsInsideVisiblePlayfield();
     this.checkEncounterTriggers();
     this.updateBullets(this.playerBullets, time, delta);
     this.updateBullets(this.enemyBullets, time, delta);
@@ -1098,6 +1103,10 @@ export class BattleScene extends Phaser.Scene {
         maxHp: spec.hp,
         speed: spec.speed,
         active: true,
+        weaponShotsRemaining: config.kind === 'jeep' ? 20 : 5,
+        nextWeaponFireAt: 0,
+        salvoShotsRemaining: 0,
+        nextSalvoFireAt: 0,
       };
       body.setData('vehicle', vehicle);
       this.vehicles.push(vehicle);
@@ -1234,7 +1243,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.bannerText = this.add.text(36, 28, '', {
       fontFamily: 'Impact, Haettenschweiler, sans-serif',
-      fontSize: '34px',
+      fontSize: '40px',
       color: '#f4e8c3',
       letterSpacing: 2,
       align: 'center',
@@ -1279,11 +1288,11 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.bannerText.setPosition(x, bannerY);
-    this.bannerText.setFontSize(compact ? '28px' : '40px');
+    this.bannerText.setScale(compact ? 0.7 : 1);
     this.bannerText.setWordWrapWidth(wrapWidth);
 
     this.reticleText.setPosition(x, reticleY);
-    this.reticleText.setFontSize(compact ? '16px' : '19px');
+    this.reticleText.setScale(compact ? 0.84 : 1);
     this.reticleText.setWordWrapWidth(wrapWidth);
   }
 
@@ -1435,13 +1444,59 @@ export class BattleScene extends Phaser.Scene {
       this.switchWeapon(player);
     }
 
-    if (this.isActionDown(player, 'fire') && time >= player.nextFireAt) {
-      this.firePlayerWeapon(player, time);
+    if (vehicle.kind === 'jeep') {
+      this.updateJeepAutoShotgun(player, vehicle, time);
+    } else {
+      this.updateTankMissileSalvo(player, vehicle, time);
+      if (this.wasActionPressed(player, 'fire')) {
+        this.startTankMissileSalvo(player, vehicle, time);
+      }
     }
 
     if (this.wasActionPressed(player, 'special') && time >= player.nextSpecialAt && player.bombs > 0) {
       this.activateBarrage(player, time);
     }
+  }
+
+  private updateJeepAutoShotgun(player: PlayerUnit, vehicle: VehicleUnit, time: number): void {
+    if (vehicle.weaponShotsRemaining <= 0 || time < vehicle.nextWeaponFireAt) {
+      return;
+    }
+
+    const direction = this.getVehicleForward(vehicle);
+    this.fireVehicleShotgun(vehicle, direction, player.tint);
+    vehicle.weaponShotsRemaining -= 1;
+    vehicle.nextWeaponFireAt = time + 500;
+    player.fireVisualUntil = time + 170;
+  }
+
+  private startTankMissileSalvo(player: PlayerUnit, vehicle: VehicleUnit, time: number): void {
+    if (vehicle.weaponShotsRemaining <= 0) {
+      this.showBanner('Tank missiles empty.', player.accent);
+      return;
+    }
+
+    if (vehicle.salvoShotsRemaining > 0 || time < vehicle.nextWeaponFireAt) {
+      return;
+    }
+
+    vehicle.salvoShotsRemaining = Math.min(5, vehicle.weaponShotsRemaining);
+    vehicle.nextSalvoFireAt = time;
+    vehicle.nextWeaponFireAt = time + 1800;
+  }
+
+  private updateTankMissileSalvo(player: PlayerUnit, vehicle: VehicleUnit, time: number): void {
+    if (vehicle.salvoShotsRemaining <= 0 || time < vehicle.nextSalvoFireAt) {
+      return;
+    }
+
+    const direction = this.getVehicleForward(vehicle);
+    const wobble = Phaser.Math.FloatBetween(-0.05, 0.05);
+    this.fireVehicleMissile(vehicle, direction.rotate(wobble), player.tint);
+    vehicle.salvoShotsRemaining -= 1;
+    vehicle.weaponShotsRemaining -= 1;
+    vehicle.nextSalvoFireAt = time + 220;
+    player.fireVisualUntil = time + 220;
   }
 
   private updateVehicles(): void {
@@ -1453,12 +1508,75 @@ export class BattleScene extends Phaser.Scene {
       vehicle.label.setPosition(vehicle.body.x, vehicle.body.y - 4);
       vehicle.label.setRotation(vehicle.body.rotation);
       vehicle.hpLabel.setPosition(vehicle.body.x, vehicle.body.y + vehicle.body.height * 0.5 + 10);
-      vehicle.hpLabel.setText(`${Math.max(0, vehicle.hp)}/${vehicle.maxHp}`);
+      const ammoLabel = vehicle.kind === 'jeep'
+        ? `SG ${Math.max(0, vehicle.weaponShotsRemaining)}`
+        : `MSL ${Math.max(0, vehicle.weaponShotsRemaining)}`;
+      vehicle.hpLabel.setText(`${Math.max(0, vehicle.hp)}/${vehicle.maxHp}  ${ammoLabel}`);
 
       if (!vehicle.driver) {
         (vehicle.body.body as Phaser.Physics.Arcade.Body).setVelocity(0, 0);
       }
     }
+  }
+
+  private getVehicleForward(vehicle: VehicleUnit): Phaser.Math.Vector2 {
+    return new Phaser.Math.Vector2(1, 0).setToPolar(vehicle.body.rotation, 1).normalize();
+  }
+
+  private getVehicleMuzzle(vehicle: VehicleUnit, direction: Phaser.Math.Vector2, distance: number): { x: number; y: number } {
+    return this.findClearBulletStart(
+      vehicle.body.x + direction.x * distance,
+      vehicle.body.y + direction.y * distance,
+      direction,
+    );
+  }
+
+  private fireVehicleShotgun(vehicle: VehicleUnit, direction: Phaser.Math.Vector2, accentTint: number): void {
+    const tint = 0xffd08a;
+    const start = this.getVehicleMuzzle(vehicle, direction, vehicle.body.width * 0.5 + 18);
+    this.createMuzzleFlash(start.x, start.y, direction, accentTint || tint);
+
+    for (let pellet = 0; pellet < 5; pellet += 1) {
+      const offset = Phaser.Math.Linear(-0.22, 0.22, pellet / 4) + Phaser.Math.FloatBetween(-0.035, 0.035);
+      this.firePlayerBullet(
+        start.x,
+        start.y,
+        direction.clone().rotate(offset),
+        410,
+        36,
+        tint,
+        620,
+        1.65,
+        1.18,
+        undefined,
+        undefined,
+        1,
+        0.72,
+        260,
+      );
+    }
+  }
+
+  private fireVehicleMissile(vehicle: VehicleUnit, direction: Phaser.Math.Vector2, accentTint: number): void {
+    const tint = 0xffb35c;
+    const start = this.getVehicleMuzzle(vehicle, direction, vehicle.body.width * 0.5 + 22);
+    this.createMuzzleFlash(start.x, start.y, direction, accentTint || tint);
+    this.firePlayerBullet(
+      start.x,
+      start.y,
+      direction,
+      320,
+      115,
+      tint,
+      980,
+      2.85,
+      1.8,
+      235,
+      150,
+      1,
+      0.84,
+      420,
+    );
   }
 
   private exitVehicle(player: PlayerUnit, safeExit: boolean): void {
@@ -1499,7 +1617,7 @@ export class BattleScene extends Phaser.Scene {
     return player.controls[action].isDown || touchActive;
   }
 
-  private wasActionPressed(player: PlayerUnit, action: Extract<GameAction, 'crouch' | 'jump' | 'special'>): boolean {
+  private wasActionPressed(player: PlayerUnit, action: Extract<GameAction, 'crouch' | 'jump' | 'special' | 'fire'>): boolean {
     const keyPressed = Phaser.Input.Keyboard.JustDown(player.controls[action]);
     const touchPressed = player.virtualControlId
       ? this.virtualGamepad.consumeJustPressed(player.virtualControlId, action)
@@ -1695,6 +1813,67 @@ export class BattleScene extends Phaser.Scene {
 
     this.cameraTarget.setPosition(focusX, focusY);
     this.setCameraZoomForViewRange(0);
+  }
+
+  private keepActorsInsideVisiblePlayfield(): void {
+    if (!this.stage) {
+      return;
+    }
+
+    const view = this.cameras.main.worldView;
+    const inset = 30;
+    const minX = Math.max(inset, view.x + inset);
+    const maxX = Math.min(this.stage.worldWidth - inset, view.right - inset);
+    const minY = Math.max(inset, view.y + inset);
+    const maxY = Math.min(this.stage.worldHeight - inset, view.bottom - inset);
+
+    if (minX >= maxX || minY >= maxY) {
+      return;
+    }
+
+    for (const player of this.players) {
+      if (!player.alive) {
+        continue;
+      }
+
+      const vehicle = player.vehicle?.active ? player.vehicle : undefined;
+      if (vehicle?.driver === player) {
+        this.clampBodyToVisiblePlayfield(vehicle.body, minX, maxX, minY, maxY);
+        player.sprite.setPosition(vehicle.body.x, vehicle.body.y);
+        (player.sprite.body as Phaser.Physics.Arcade.Body).reset(vehicle.body.x, vehicle.body.y);
+        continue;
+      }
+
+      this.clampBodyToVisiblePlayfield(player.sprite, minX, maxX, minY, maxY);
+    }
+  }
+
+  private clampBodyToVisiblePlayfield(
+    object: Phaser.GameObjects.Components.Transform & {
+      body: unknown;
+    },
+    minX: number,
+    maxX: number,
+    minY: number,
+    maxY: number,
+  ): void {
+    const clampedX = Phaser.Math.Clamp(object.x, minX, maxX);
+    const clampedY = Phaser.Math.Clamp(object.y, minY, maxY);
+    const changedX = clampedX !== object.x;
+    const changedY = clampedY !== object.y;
+    if (!changedX && !changedY) {
+      return;
+    }
+
+    const body = object.body as Phaser.Physics.Arcade.Body | undefined;
+    body?.reset(clampedX, clampedY);
+    if (changedX) {
+      body?.setVelocityX(0);
+    }
+    if (changedY) {
+      body?.setVelocityY(0);
+    }
+    object.setPosition(clampedX, clampedY);
   }
 
   private isPlayerUsingHighGround(player: PlayerUnit): boolean {
