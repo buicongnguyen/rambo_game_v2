@@ -114,12 +114,23 @@ export class InterfaceController {
             </div>
           </div>
         ` : ''}
+        ${this.sessionSnapshot.phase === 'playing' ? `
+          <button type="button" class="skip-stage-button" data-skip-stage>
+            Skip Stage
+          </button>
+        ` : ''}
         <div class="score-chip">
           <span>Total Score</span>
           <strong>${hud.totalScore.toLocaleString()}</strong>
         </div>
       </div>
     `;
+
+    const skipButton = this.hudRoot.querySelector<HTMLButtonElement>('button[data-skip-stage]');
+    skipButton?.addEventListener('click', () => {
+      this.startMusic?.();
+      this.director.skipToNextStage();
+    });
   }
 
   private renderOverlay(): void {

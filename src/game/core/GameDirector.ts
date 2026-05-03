@@ -70,6 +70,19 @@ export class GameDirector {
     this.emit();
   }
 
+  skipToNextStage(): void {
+    if (this.currentStageIndex >= this.stages.length - 1) {
+      this.currentStageIndex = 0;
+    } else {
+      this.currentStageIndex += 1;
+    }
+
+    this.phase = 'playing';
+    this.completedStages = Math.min(this.completedStages, this.currentStageIndex);
+    this.runSerial += 1;
+    this.emit();
+  }
+
   addScore(points: number): void {
     this.totalScore += points;
   }

@@ -2507,30 +2507,94 @@ export class BattleScene extends Phaser.Scene {
   private activateBarrage(player: PlayerUnit, time: number): void {
     player.bombs -= 1;
     player.nextSpecialAt = time + 2600;
+    const radius = 220;
 
     const blast = this.add.image(player.sprite.x, player.sprite.y, 'blast-circle');
     blast.setTint(player.tint);
-    blast.setAlpha(0.35);
+    blast.setAlpha(0.34);
     blast.setDepth(18);
     blast.setScale(0.1);
+    blast.setBlendMode(Phaser.BlendModes.ADD);
+
+    const rangeRing = this.add.circle(player.sprite.x, player.sprite.y, radius, player.tint, 0.12);
+    rangeRing.setDepth(17);
+    rangeRing.setStrokeStyle(5, 0xfff2c4, 0.82);
+    rangeRing.setBlendMode(Phaser.BlendModes.ADD);
+
+    const warningRing = this.add.circle(player.sprite.x, player.sprite.y, radius * 0.72, 0xfff2c4, 0);
+    warningRing.setDepth(18);
+    warningRing.setStrokeStyle(3, player.tint, 0.9);
+    warningRing.setBlendMode(Phaser.BlendModes.ADD);
+
+    const label = this.add.text(player.sprite.x, player.sprite.y - radius - 18, 'BOMB AREA', {
+      fontFamily: 'Impact, Haettenschweiler, sans-serif',
+      fontSize: '24px',
+      color: '#fff2c4',
+      stroke: '#3b170b',
+      strokeThickness: 5,
+      letterSpacing: 2,
+    }).setOrigin(0.5).setDepth(21);
 
     this.tweens.add({
       targets: blast,
-      scale: 16,
+      scale: radius / 10,
       alpha: 0,
-      duration: 260,
+      duration: 420,
       onComplete: () => blast.destroy(),
     });
 
+    this.tweens.add({
+      targets: [rangeRing, warningRing],
+      scale: 1.08,
+      alpha: 0,
+      duration: 1150,
+      ease: 'Cubic.easeOut',
+      onComplete: () => {
+        rangeRing.destroy();
+        warningRing.destroy();
+      },
+    });
+
+    this.tweens.add({
+      targets: label,
+      y: label.y - 22,
+      alpha: 0,
+      duration: 1000,
+      ease: 'Quad.easeOut',
+      onComplete: () => label.destroy(),
+    });
+
+    for (let puffIndex = 0; puffIndex < 14; puffIndex += 1) {
+      const angle = (Math.PI * 2 * puffIndex) / 14;
+      const distance = radius * Phaser.Math.FloatBetween(0.35, 0.96);
+      const puff = this.add.image(
+        player.sprite.x + Math.cos(angle) * distance,
+        player.sprite.y + Math.sin(angle) * distance,
+        'blast-circle',
+      );
+      puff.setTint(0xb8b09a);
+      puff.setAlpha(0.18);
+      puff.setDepth(16);
+      puff.setScale(Phaser.Math.FloatBetween(1.4, 2.6));
+      this.tweens.add({
+        targets: puff,
+        scale: puff.scaleX * 1.7,
+        alpha: 0,
+        duration: 1200 + puffIndex * 26,
+        ease: 'Sine.easeOut',
+        onComplete: () => puff.destroy(),
+      });
+    }
+
     this.cameras.main.shake(120, 0.005);
     for (const enemy of this.enemies) {
-      if (enemy.alive && Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, enemy.sprite.x, enemy.sprite.y) < 220) {
+      if (enemy.alive && Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, enemy.sprite.x, enemy.sprite.y) < radius) {
         this.damageEnemy(enemy, 70);
       }
     }
 
     for (const boss of this.bosses) {
-      if (boss.alive && Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, boss.sprite.x, boss.sprite.y) < 260) {
+      if (boss.alive && Phaser.Math.Distance.Between(player.sprite.x, player.sprite.y, boss.sprite.x, boss.sprite.y) < radius + 40) {
         this.damageBoss(boss, 60);
       }
     }
