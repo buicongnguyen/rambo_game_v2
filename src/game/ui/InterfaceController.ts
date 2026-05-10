@@ -265,12 +265,12 @@ export class InterfaceController {
           <h1>Operation Iron Vengeance</h1>
           <p>
             Your brief points closer to Contra, Ikari Warriors, Mercs, and Metal Slug than the original NES Rambo.
-            This prototype turns that idea into a three-stage co-op assault campaign with bosses at the end of every mission.
+            Shadow Squad mode keeps mobile play single-stick friendly while rescued soldiers follow, ride, and fight with you.
           </p>
           ${this.renderDifficultySelector()}
           <div class="overlay-actions">
             <button type="button" class="action-button primary" data-players="1">Start Solo</button>
-            <button type="button" class="action-button" data-players="2">Start 2-Player</button>
+            <button type="button" class="action-button" data-players="2">Start Shadow Squad</button>
           </div>
           <div class="overlay-notes">
             <span>Next up: ${stage.codename}</span>
@@ -297,7 +297,7 @@ export class InterfaceController {
           </div>
           <div class="overlay-actions">
             <button type="button" class="action-button primary" data-players="1">Continue Solo</button>
-            <button type="button" class="action-button" data-players="2">Continue With 2P</button>
+            <button type="button" class="action-button" data-players="2">Continue Shadow Squad</button>
           </div>
         </section>
       `;
@@ -316,7 +316,7 @@ export class InterfaceController {
           ${this.renderDifficultySelector()}
           <div class="overlay-actions">
             <button type="button" class="action-button primary" data-players="1">Retry Solo</button>
-            <button type="button" class="action-button" data-players="2">Retry With 2P</button>
+            <button type="button" class="action-button" data-players="2">Retry Shadow Squad</button>
           </div>
         </section>
       `;
@@ -333,7 +333,7 @@ export class InterfaceController {
         ${this.renderDifficultySelector()}
         <div class="overlay-actions">
           <button type="button" class="action-button primary" data-players="1">Run Solo Again</button>
-          <button type="button" class="action-button" data-players="2">Run 2-Player Again</button>
+          <button type="button" class="action-button" data-players="2">Run Shadow Squad Again</button>
         </div>
       </section>
     `;

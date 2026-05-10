@@ -72,6 +72,7 @@ interface VehicleVisualPart {
   baseTint: number;
   brokenTint: number;
   alpha: number;
+  spinSpeed?: number;
 }
 
 interface VehicleUnit {
@@ -81,6 +82,8 @@ interface VehicleUnit {
   hpLabel: Phaser.GameObjects.Text;
   visualParts: VehicleVisualPart[];
   driver?: PlayerUnit;
+  passengerAllies: AllyUnit[];
+  capacity: number;
   hp: number;
   maxHp: number;
   speed: number;
@@ -121,8 +124,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 430,
     damage: 44,
     maxDistance: 760,
-    maxAmmo: 36,
-    pickupAmmo: 18,
+    maxAmmo: 72,
+    pickupAmmo: 36,
     ammoCost: 1,
     spread: 0.3,
     pellets: 6,
@@ -138,8 +141,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 340,
     damage: 24,
     maxDistance: 580,
-    maxAmmo: 90,
-    pickupAmmo: 45,
+    maxAmmo: 180,
+    pickupAmmo: 90,
     ammoCost: 1,
     spread: 0.18,
     pellets: 5,
@@ -155,8 +158,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 360,
     damage: 135,
     maxDistance: 980,
-    maxAmmo: 8,
-    pickupAmmo: 4,
+    maxAmmo: 16,
+    pickupAmmo: 8,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -174,8 +177,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 860,
     damage: 150,
     maxDistance: 1900,
-    maxAmmo: 18,
-    pickupAmmo: 9,
+    maxAmmo: 36,
+    pickupAmmo: 18,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -194,8 +197,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 330,
     damage: 80,
     maxDistance: 900,
-    maxAmmo: 12,
-    pickupAmmo: 6,
+    maxAmmo: 24,
+    pickupAmmo: 12,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -213,8 +216,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 300,
     damage: 105,
     maxDistance: 960,
-    maxAmmo: 6,
-    pickupAmmo: 3,
+    maxAmmo: 12,
+    pickupAmmo: 6,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -232,8 +235,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 0,
     damage: 130,
     maxDistance: 1180,
-    maxAmmo: 20,
-    pickupAmmo: 10,
+    maxAmmo: 40,
+    pickupAmmo: 20,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -251,11 +254,11 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 470,
     damage: 24,
     maxDistance: 620,
-    maxAmmo: 160,
-    pickupAmmo: 80,
+    maxAmmo: 1600,
+    pickupAmmo: 800,
     ammoCost: 1,
     spread: 0.06,
-    pellets: 1,
+    pellets: 2,
     scaleX: 1.45,
     scaleY: 1.05,
   },
@@ -268,8 +271,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 270,
     damage: 72,
     maxDistance: 760,
-    maxAmmo: 14,
-    pickupAmmo: 7,
+    maxAmmo: 28,
+    pickupAmmo: 14,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -288,8 +291,8 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     bulletSpeed: 250,
     damage: 42,
     maxDistance: 700,
-    maxAmmo: 10,
-    pickupAmmo: 5,
+    maxAmmo: 20,
+    pickupAmmo: 10,
     ammoCost: 1,
     spread: 0,
     pellets: 1,
@@ -354,6 +357,24 @@ interface PlayerUnit {
   };
 }
 
+interface AllyUnit {
+  id: string;
+  sprite: Phaser.Physics.Arcade.Sprite;
+  label: Phaser.GameObjects.Text;
+  alive: boolean;
+  nextFireAt: number;
+  followOffset: Phaser.Math.Vector2;
+  vehicle?: VehicleUnit;
+}
+
+interface RescueBunker {
+  id: string;
+  body: Phaser.GameObjects.Rectangle;
+  marker: Phaser.GameObjects.Text;
+  rescued: boolean;
+  linkedObjects: Phaser.GameObjects.GameObject[];
+}
+
 interface EnemyUnit {
   id: string;
   kind: EnemyKind;
@@ -377,6 +398,7 @@ interface EnemyUnit {
 interface BossUnit {
   config: BossConfig;
   sprite: Phaser.Physics.Arcade.Sprite;
+  visualParts: VehicleVisualPart[];
   health: number;
   maxHealth: number;
   alive: boolean;
@@ -408,6 +430,8 @@ export class BattleScene extends Phaser.Scene {
   private loadedToken = '';
   private stage?: StageConfig;
   private players: PlayerUnit[] = [];
+  private allies: AllyUnit[] = [];
+  private rescueBunkers: RescueBunker[] = [];
   private enemies: EnemyUnit[] = [];
   private bosses: BossUnit[] = [];
   private boss?: BossUnit;
@@ -419,6 +443,7 @@ export class BattleScene extends Phaser.Scene {
   private playing = false;
   private hudTimestamp = 0;
   private playerGroup?: Phaser.Physics.Arcade.Group;
+  private allyGroup?: Phaser.Physics.Arcade.Group;
   private enemyGroup?: Phaser.Physics.Arcade.Group;
   private bossGroup?: Phaser.Physics.Arcade.Group;
   private playerBullets?: Phaser.Physics.Arcade.Group;
@@ -426,6 +451,7 @@ export class BattleScene extends Phaser.Scene {
   private weaponPickups?: Phaser.Physics.Arcade.StaticGroup;
   private healthPickups?: Phaser.Physics.Arcade.StaticGroup;
   private supplyCrates?: Phaser.Physics.Arcade.StaticGroup;
+  private rescueBunkerGroup?: Phaser.Physics.Arcade.StaticGroup;
   private vehicleGroup?: Phaser.Physics.Arcade.Group;
   private vehicles: VehicleUnit[] = [];
   private obstacleBodies: Phaser.GameObjects.Rectangle[] = [];
@@ -438,6 +464,7 @@ export class BattleScene extends Phaser.Scene {
   private reticleText?: Phaser.GameObjects.Text;
   private objectivePanel?: Phaser.GameObjects.Image;
   private visionGraphics?: Phaser.GameObjects.Graphics;
+  private shadowSquadMode = false;
 
   constructor(
     director: GameDirector,
@@ -485,6 +512,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.updatePlayers(time);
+    this.updateAllies(time);
     this.updateVehicles();
     this.updateEnemies(time);
     this.drawEnemyVisionCones();
@@ -601,7 +629,10 @@ export class BattleScene extends Phaser.Scene {
     this.playing = false;
     this.virtualGamepad.resetAll();
     this.stage = snapshot.currentStage;
+    this.shadowSquadMode = snapshot.playerCount === 2;
     this.players = [];
+    this.allies = [];
+    this.rescueBunkers = [];
     this.enemies = [];
     this.bosses = [];
     this.vehicles = [];
@@ -633,6 +664,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawBackdrop(this.stage, false);
 
     this.playerGroup = this.physics.add.group();
+    this.allyGroup = this.physics.add.group();
     this.enemyGroup = this.physics.add.group();
     this.bossGroup = this.physics.add.group();
     this.playerBullets = this.physics.add.group();
@@ -640,6 +672,7 @@ export class BattleScene extends Phaser.Scene {
     this.weaponPickups = this.physics.add.staticGroup();
     this.healthPickups = this.physics.add.staticGroup();
     this.supplyCrates = this.physics.add.staticGroup();
+    this.rescueBunkerGroup = this.physics.add.staticGroup();
     this.vehicleGroup = this.physics.add.group();
     this.obstacleBodies = [];
     this.bulletZones = [];
@@ -657,13 +690,14 @@ export class BattleScene extends Phaser.Scene {
     this.createWeaponPickups(this.stage);
     this.createHealthPickups(this.stage);
     this.createVehicles(this.stage);
+    this.createRescueBunkers(this.stage);
     this.visionGraphics = this.add.graphics();
     this.visionGraphics.setDepth(3);
-    this.createPlayers(snapshot.playerCount, snapshot.difficulty);
+    this.createPlayers(this.shadowSquadMode ? 1 : snapshot.playerCount, snapshot.difficulty);
     this.setupColliders();
     this.createOverlayText();
 
-    this.showBanner(`${this.stage.codename} deployed`, '#f3e6bf');
+    this.showBanner(this.shadowSquadMode ? `${this.stage.codename} shadow rescue` : `${this.stage.codename} deployed`, '#f3e6bf');
     this.playing = true;
     this.emitHud('live');
   }
@@ -1335,6 +1369,55 @@ export class BattleScene extends Phaser.Scene {
     box.setData('linkedObjects', [shadow, lid, crossH, crossV, latch]);
   }
 
+  private createRescueBunkers(stage: StageConfig): void {
+    if (!this.shadowSquadMode) {
+      return;
+    }
+
+    const stageNumber = this.getStageNumber(stage);
+    const bunkerSeeds = [
+      { x: Math.floor(stage.worldWidth * 0.24), y: stage.worldHeight * 0.5 - 250 + stageNumber * 5 },
+      { x: Math.floor(stage.worldWidth * 0.48), y: stage.worldHeight * 0.5 + 230 - stageNumber * 6 },
+      { x: Math.floor(stage.worldWidth * 0.68), y: stage.worldHeight * 0.5 - 225 + (stageNumber % 3) * 20 },
+      { x: Math.floor(stage.worldWidth * 0.82), y: stage.worldHeight * 0.5 + 205 - (stageNumber % 4) * 18 },
+    ];
+
+    for (const [index, seed] of bunkerSeeds.entries()) {
+      const position = this.findOpenCoverSpot(seed.x, seed.y, 78, 50, stage, 18) ?? seed;
+      this.createRescueBunker(`rescue-${stage.id}-${index}`, position.x, position.y);
+    }
+  }
+
+  private createRescueBunker(id: string, x: number, y: number): void {
+    const body = this.add.rectangle(x, y, 78, 50, 0x3f4547, 0.94);
+    body.setDepth(8);
+    body.setStrokeStyle(3, 0x9ed8ff, 0.46);
+    body.setData('rescueBunkerId', id);
+    this.physics.add.existing(body, true);
+    this.rescueBunkerGroup?.add(body);
+
+    const roof = this.add.rectangle(x, y - 21, 86, 10, 0x263034, 0.92).setDepth(9);
+    const door = this.add.rectangle(x - 23, y + 6, 18, 28, 0x10181a, 0.92).setDepth(9);
+    const light = this.add.circle(x + 26, y - 4, 8, 0x9ed8ff, 0.82).setDepth(10);
+    const barsA = this.add.rectangle(x - 23, y + 6, 3, 26, 0x9aa8a8, 0.9).setDepth(10);
+    const barsB = this.add.rectangle(x - 23, y + 6, 18, 3, 0x9aa8a8, 0.9).setDepth(10);
+    const marker = this.add.text(x, y + 34, 'RESCUE', {
+      fontFamily: 'Impact, Haettenschweiler, sans-serif',
+      fontSize: '16px',
+      color: '#dff7ff',
+      stroke: '#102027',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setDepth(11);
+
+    this.rescueBunkers.push({
+      id,
+      body,
+      marker,
+      rescued: false,
+      linkedObjects: [roof, door, light, barsA, barsB],
+    });
+  }
+
   private createVehicles(stage: StageConfig): void {
     const stageNumber = this.getStageNumber(stage);
     const vehicles: Array<{ kind: VehicleKind; x: number; y: number }> = [
@@ -1381,6 +1464,8 @@ export class BattleScene extends Phaser.Scene {
         label,
         hpLabel,
         visualParts: [],
+        passengerAllies: [],
+        capacity: spec.capacity,
         hp: spec.hp,
         maxHp: spec.hp,
         speed: spec.speed,
@@ -1571,16 +1656,17 @@ export class BattleScene extends Phaser.Scene {
     label: string;
     weaponShots: number;
     ammoLabel: string;
+    capacity: number;
   } {
     if (kind === 'motorcycle') {
-      return { width: 62, height: 28, tint: 0x7a3e28, brokenTint: 0x2d211b, hp: 2, speed: 360, label: 'BIKE', weaponShots: 0, ammoLabel: 'FAST' };
+      return { width: 62, height: 28, tint: 0x7a3e28, brokenTint: 0x2d211b, hp: 2, speed: 360, label: 'BIKE', weaponShots: 0, ammoLabel: 'FAST', capacity: 2 };
     }
 
     if (kind === 'jeep') {
-      return { width: 74, height: 42, tint: 0x596334, brokenTint: 0x2d2a25, hp: 5, speed: 300, label: 'JEEP', weaponShots: 20, ammoLabel: 'SG' };
+      return { width: 74, height: 42, tint: 0x596334, brokenTint: 0x2d2a25, hp: 5, speed: 300, label: 'JEEP', weaponShots: 20, ammoLabel: 'SG', capacity: 6 };
     }
 
-    return { width: 92, height: 54, tint: 0x53606a, brokenTint: 0x2d2a25, hp: 18, speed: 230, label: 'TANK', weaponShots: 5, ammoLabel: 'MSL' };
+    return { width: 92, height: 54, tint: 0x53606a, brokenTint: 0x2d2a25, hp: 18, speed: 230, label: 'TANK', weaponShots: 5, ammoLabel: 'MSL', capacity: 8 };
   }
 
   private createPlayers(playerCount: 1 | 2, difficulty: DifficultyMode): void {
@@ -1667,6 +1753,7 @@ export class BattleScene extends Phaser.Scene {
   private setupColliders(): void {
     for (const obstacle of this.obstacleBodies) {
       this.physics.add.collider(this.playerGroup!, obstacle);
+      this.physics.add.collider(this.allyGroup!, obstacle);
       this.physics.add.collider(this.enemyGroup!, obstacle);
       this.physics.add.collider(this.bossGroup!, obstacle);
       this.physics.add.collider(this.vehicleGroup!, obstacle);
@@ -1707,6 +1794,9 @@ export class BattleScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.playerGroup!, this.vehicleGroup!, (player, vehicle) => {
       this.handleVehicleEntry(player as Phaser.GameObjects.GameObject, vehicle as Phaser.GameObjects.GameObject);
+    });
+    this.physics.add.overlap(this.playerGroup!, this.rescueBunkerGroup!, (player, bunker) => {
+      this.handleRescueBunker(player as Phaser.GameObjects.GameObject, bunker as Phaser.GameObjects.GameObject);
     });
     this.physics.add.overlap(this.vehicleGroup!, this.enemyGroup!, (vehicle, enemy) => {
       this.handleVehicleEnemyContact(vehicle as Phaser.GameObjects.GameObject, enemy as Phaser.GameObjects.GameObject);
@@ -1891,6 +1981,102 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private updateAllies(time: number): void {
+    const leader = this.players.find((player) => player.alive);
+    if (!leader) {
+      return;
+    }
+
+    for (const [index, ally] of this.allies.entries()) {
+      if (!ally.alive) {
+        continue;
+      }
+
+      if (ally.vehicle?.active) {
+        const vehicle = ally.vehicle;
+        const seatAngle = vehicle.body.rotation + Math.PI * 0.5;
+        const seatOffset = (index % Math.max(1, vehicle.capacity - 1)) - (vehicle.capacity - 2) * 0.5;
+        ally.sprite.setPosition(
+          vehicle.body.x + Math.cos(seatAngle) * seatOffset * 8,
+          vehicle.body.y + Math.sin(seatAngle) * seatOffset * 8,
+        );
+        ally.sprite.setVelocity(0, 0);
+        ally.sprite.setRotation(vehicle.body.rotation);
+        ally.sprite.setAlpha(0.28);
+        ally.label.setVisible(false);
+        continue;
+      }
+
+      ally.sprite.setAlpha(0.9);
+      ally.label.setVisible(true);
+      const targetX = leader.sprite.x - leader.aim.x * (54 + index * 18) + ally.followOffset.x;
+      const targetY = leader.sprite.y - leader.aim.y * (54 + index * 18) + ally.followOffset.y;
+      const direction = new Phaser.Math.Vector2(targetX - ally.sprite.x, targetY - ally.sprite.y);
+      const distance = direction.length();
+      if (distance > 18) {
+        direction.normalize();
+        const speed = distance > 180 ? 235 : 175;
+        ally.sprite.setVelocity(direction.x * speed, direction.y * speed);
+        ally.sprite.setRotation(direction.angle());
+        this.playLoop(ally.sprite, animationKey('player-run'));
+      } else {
+        ally.sprite.setVelocity(0, 0);
+        this.playLoop(ally.sprite, animationKey('player-idle'));
+      }
+
+      ally.label.setPosition(ally.sprite.x, ally.sprite.y - 28);
+      this.fireAllyRifleAtVisibleEnemy(ally, time);
+    }
+  }
+
+  private fireAllyRifleAtVisibleEnemy(ally: AllyUnit, time: number): void {
+    if (time < ally.nextFireAt) {
+      return;
+    }
+
+    const target = this.findClosestVisibleEnemy(ally.sprite.x, ally.sprite.y, 470);
+    if (!target) {
+      return;
+    }
+
+    const direction = new Phaser.Math.Vector2(target.x - ally.sprite.x, target.y - ally.sprite.y).normalize();
+    ally.sprite.setRotation(direction.angle());
+    ally.nextFireAt = time + Phaser.Math.Between(520, 760);
+    const muzzle = this.findClearBulletStart(ally.sprite.x + direction.x * 20, ally.sprite.y + direction.y * 20, direction);
+    this.createMuzzleFlash(muzzle.x, muzzle.y, direction, 0xaee8ff);
+    this.firePlayerBullet(muzzle.x, muzzle.y, direction, 385, 22, 0xaee8ff, 480, 1.35, 0.95);
+    this.playLoop(ally.sprite, animationKey('player-fire'));
+  }
+
+  private findClosestVisibleEnemy(x: number, y: number, maxDistance: number): { x: number; y: number } | undefined {
+    let bestTarget: { x: number; y: number } | undefined;
+    let bestDistance = maxDistance;
+
+    const consider = (targetX: number, targetY: number): void => {
+      const distance = Phaser.Math.Distance.Between(x, y, targetX, targetY);
+      if (distance >= bestDistance || !this.hasLineOfSight(x, y, targetX, targetY)) {
+        return;
+      }
+
+      bestDistance = distance;
+      bestTarget = { x: targetX, y: targetY };
+    };
+
+    for (const enemy of this.enemies) {
+      if (enemy.alive) {
+        consider(enemy.sprite.x, enemy.sprite.y);
+      }
+    }
+
+    for (const boss of this.bosses) {
+      if (boss.alive) {
+        consider(boss.sprite.x, boss.sprite.y);
+      }
+    }
+
+    return bestTarget;
+  }
+
   private updateVehicleDriver(player: PlayerUnit, time: number): void {
     const vehicle = player.vehicle;
     if (!vehicle?.active) {
@@ -2015,7 +2201,9 @@ export class BattleScene extends Phaser.Scene {
       const ammoLabel = vehicle.weaponShotsRemaining > 0
         ? `${vehicle.ammoLabel} ${Math.max(0, vehicle.weaponShotsRemaining)}`
         : vehicle.ammoLabel;
-      vehicle.hpLabel.setText(`${Math.max(0, vehicle.hp)}/${vehicle.maxHp}  ${ammoLabel}`);
+      const teamCount = (vehicle.driver ? 1 : 0) + vehicle.passengerAllies.length;
+      const teamLabel = teamCount > 0 ? ` TEAM ${teamCount}/${vehicle.capacity}` : ` CAP ${vehicle.capacity}`;
+      vehicle.hpLabel.setText(`${Math.max(0, vehicle.hp)}/${vehicle.maxHp}  ${ammoLabel}${teamLabel}`);
 
       if (!vehicle.driver) {
         (vehicle.body.body as Phaser.Physics.Arcade.Body).setVelocity(0, 0);
@@ -2027,6 +2215,10 @@ export class BattleScene extends Phaser.Scene {
     this.syncVisualParts(vehicle.body.x, vehicle.body.y, vehicle.body.rotation, vehicle.visualParts);
   }
 
+  private syncBossVisuals(boss: BossUnit, time = this.time.now): void {
+    this.syncVisualParts(boss.sprite.x, boss.sprite.y, boss.sprite.rotation, boss.visualParts, time);
+  }
+
   private syncEnemyVisuals(enemy: EnemyUnit): void {
     if (!enemy.visualParts) {
       return;
@@ -2034,14 +2226,14 @@ export class BattleScene extends Phaser.Scene {
     this.syncVisualParts(enemy.sprite.x, enemy.sprite.y, enemy.sprite.rotation, enemy.visualParts);
   }
 
-  private syncVisualParts(x: number, y: number, angle: number, parts: VehicleVisualPart[]): void {
+  private syncVisualParts(x: number, y: number, angle: number, parts: VehicleVisualPart[], time = this.time.now): void {
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     for (const part of parts) {
       const partX = x + part.offsetX * cos - part.offsetY * sin;
       const partY = y + part.offsetX * sin + part.offsetY * cos;
       part.object.setPosition(partX, partY);
-      part.object.setRotation(angle + part.rotationOffset);
+      part.object.setRotation(angle + part.rotationOffset + (part.spinSpeed ?? 0) * time);
     }
   }
 
@@ -2053,6 +2245,10 @@ export class BattleScene extends Phaser.Scene {
     if (enemy.visualParts) {
       this.setVisualPartsTint(enemy.visualParts, mode);
     }
+  }
+
+  private setBossVisualTint(boss: BossUnit, mode: 'base' | 'hit' | 'broken'): void {
+    this.setVisualPartsTint(boss.visualParts, mode);
   }
 
   private setVisualPartsTint(parts: VehicleVisualPart[], mode: 'base' | 'hit' | 'broken'): void {
@@ -2145,7 +2341,53 @@ export class BattleScene extends Phaser.Scene {
     const exitY = Phaser.Math.Clamp(vehicle.body.y - Math.sin(vehicle.body.rotation) * offset, 24, (this.stage?.worldHeight ?? 920) - 24);
     player.sprite.setPosition(exitX, exitY);
     (player.sprite.body as Phaser.Physics.Arcade.Body).reset(exitX, exitY);
+    this.unloadVehicleAllies(vehicle);
     this.showBanner(`${player.label} exited ${vehicle.kind.toUpperCase()}`, player.accent);
+  }
+
+  private boardNearbyAllies(vehicle: VehicleUnit): number {
+    const availableSeats = Math.max(0, vehicle.capacity - 1 - vehicle.passengerAllies.length);
+    if (availableSeats <= 0) {
+      return 0;
+    }
+
+    const candidates = this.allies
+      .filter((ally) => ally.alive && !ally.vehicle)
+      .map((ally) => ({
+        ally,
+        distance: Phaser.Math.Distance.Between(vehicle.body.x, vehicle.body.y, ally.sprite.x, ally.sprite.y),
+      }))
+      .filter((entry) => entry.distance <= 260)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, availableSeats);
+
+    for (const { ally } of candidates) {
+      ally.vehicle = vehicle;
+      vehicle.passengerAllies.push(ally);
+      ally.sprite.setAlpha(0.28);
+      ally.label.setVisible(false);
+      (ally.sprite.body as Phaser.Physics.Arcade.Body).enable = false;
+    }
+
+    return candidates.length;
+  }
+
+  private unloadVehicleAllies(vehicle: VehicleUnit): void {
+    const passengers = [...vehicle.passengerAllies];
+    vehicle.passengerAllies = [];
+
+    passengers.forEach((ally, index) => {
+      ally.vehicle = undefined;
+      const angle = vehicle.body.rotation + Math.PI + (index - passengers.length * 0.5) * 0.24;
+      const exitX = Phaser.Math.Clamp(vehicle.body.x + Math.cos(angle) * 48, 28, (this.stage?.worldWidth ?? 2600) - 28);
+      const exitY = Phaser.Math.Clamp(vehicle.body.y + Math.sin(angle) * 48, 28, (this.stage?.worldHeight ?? 920) - 28);
+      ally.sprite.setPosition(exitX, exitY);
+      ally.sprite.setAlpha(0.9);
+      ally.label.setVisible(true);
+      const body = ally.sprite.body as Phaser.Physics.Arcade.Body;
+      body.enable = true;
+      body.reset(exitX, exitY);
+    });
   }
 
   private getMovementInput(player: PlayerUnit): Phaser.Math.Vector2 {
@@ -2298,6 +2540,7 @@ export class BattleScene extends Phaser.Scene {
     const target = this.closestLivingPlayer(sprite.x, sprite.y);
     if (!target) {
       sprite.setVelocity(0, 0);
+      this.syncBossVisuals(boss, time);
       return;
     }
 
@@ -2350,6 +2593,8 @@ export class BattleScene extends Phaser.Scene {
     } else {
       this.stopAtFirstFrame(sprite);
     }
+
+    this.syncBossVisuals(boss, time);
   }
 
   private drawEnemyVisionCones(): void {
@@ -2699,10 +2944,13 @@ export class BattleScene extends Phaser.Scene {
     sprite.setCollideWorldBounds(true);
     this.configureBody(sprite, 72, 40);
     sprite.setFrame(0);
+    sprite.setAlpha(0.18);
+    sprite.setTint(config.kind === 'gunship' ? 0xb8e8ff : config.kind === 'barge' ? 0xffd694 : 0xf0d36b);
 
     const boss: BossUnit = {
       config,
       sprite,
+      visualParts: [],
       health: config.health,
       maxHealth: config.health,
       alive: true,
@@ -2713,10 +2961,104 @@ export class BattleScene extends Phaser.Scene {
       direction: index % 2 === 0 ? -1 : 1,
     };
 
+    boss.visualParts = this.createBossVisualParts(boss);
+    this.syncBossVisuals(boss);
+
     sprite.setData('actorKind', 'boss');
     sprite.setData('actor', boss);
     this.bossGroup?.add(sprite);
     this.bosses.push(boss);
+  }
+
+  private createBossVisualParts(boss: BossUnit): VehicleVisualPart[] {
+    const parts: VehicleVisualPart[] = [];
+    const addShape = (
+      object: Phaser.GameObjects.Shape,
+      offsetX: number,
+      offsetY: number,
+      rotationOffset: number,
+      baseTint: number,
+      brokenTint: number,
+      alpha: number,
+      spinSpeed = 0,
+    ): void => {
+      object.setDepth(15);
+      object.setFillStyle(baseTint, alpha);
+      parts.push({ object, offsetX, offsetY, rotationOffset, baseTint, brokenTint, alpha, spinSpeed });
+    };
+    const addRect = (
+      offsetX: number,
+      offsetY: number,
+      width: number,
+      height: number,
+      baseTint: number,
+      alpha = 0.92,
+      rotationOffset = 0,
+      spinSpeed = 0,
+    ): void => addShape(this.add.rectangle(0, 0, width, height), offsetX, offsetY, rotationOffset, baseTint, 0x2a2624, alpha, spinSpeed);
+    const addEllipse = (
+      offsetX: number,
+      offsetY: number,
+      width: number,
+      height: number,
+      baseTint: number,
+      alpha = 0.92,
+      rotationOffset = 0,
+      spinSpeed = 0,
+    ): void => addShape(this.add.ellipse(0, 0, width, height), offsetX, offsetY, rotationOffset, baseTint, 0x2a2624, alpha, spinSpeed);
+    const addTriangle = (
+      offsetX: number,
+      offsetY: number,
+      width: number,
+      height: number,
+      baseTint: number,
+      alpha = 0.92,
+      rotationOffset = 0,
+    ): void => addShape(this.add.triangle(0, 0, width * 0.5, 0, 0, height, width, height), offsetX, offsetY, rotationOffset, baseTint, 0x2a2624, alpha);
+
+    if (boss.config.kind === 'gunship') {
+      addEllipse(0, 8, 138, 36, 0x000000, 0.18);
+      addEllipse(0, 0, 112, 42, 0x4f6e74, 0.94);
+      addEllipse(18, -1, 72, 32, 0x89b8c0, 0.9);
+      addRect(-58, 0, 86, 12, 0x43585e, 0.9);
+      addEllipse(-101, 0, 28, 22, 0x5b777d, 0.9);
+      addRect(6, -5, 168, 8, 0xbff8ff, 0.62, 0, 0.018);
+      addRect(6, -5, 8, 148, 0xbff8ff, 0.48, 0, 0.018);
+      addRect(35, -25, 34, 12, 0x263138, 0.96);
+      addRect(35, 25, 34, 12, 0x263138, 0.96);
+      addRect(74, 0, 32, 8, 0xffd46a, 0.96);
+      addRect(92, 0, 30, 5, 0x161b1e, 0.96);
+      addEllipse(48, -1, 26, 18, 0xeaffff, 0.52);
+    } else if (boss.config.kind === 'barge') {
+      addEllipse(-6, 12, 132, 34, 0x000000, 0.16);
+      addTriangle(52, -32, 78, 64, 0xd2dee3, 0.94, Math.PI * 0.5);
+      addRect(-8, 0, 128, 28, 0x7b8990, 0.96);
+      addTriangle(-16, -62, 112, 78, 0x50616b, 0.9, 0.08);
+      addTriangle(-16, 62, 112, 78, 0x50616b, 0.9, Math.PI - 0.08);
+      addRect(6, 0, 82, 12, 0xdcecf0, 0.64);
+      addEllipse(-62, -13, 34, 20, 0xff8d4e, 0.76);
+      addEllipse(-62, 13, 34, 20, 0xff8d4e, 0.76);
+      addRect(58, -17, 26, 7, 0xffd66e, 0.95);
+      addRect(58, 17, 26, 7, 0xffd66e, 0.95);
+      addEllipse(32, 0, 30, 18, 0xaee8ff, 0.58);
+    } else {
+      addEllipse(0, 24, 132, 42, 0x000000, 0.18);
+      addRect(-4, 20, 110, 34, 0x41525a, 0.96);
+      addRect(18, -18, 70, 58, 0x6f7d7f, 0.96);
+      addRect(32, -58, 42, 28, 0x4e5d62, 0.96);
+      addEllipse(44, -60, 15, 12, 0xffd46a, 0.92);
+      addRect(8, -6, 34, 52, 0x2e393e, 0.84);
+      addRect(70, -20, 78, 13, 0x1c2428, 0.96);
+      addRect(108, -20, 38, 8, 0xffb35c, 0.96);
+      addRect(58, 34, 46, 16, 0x2b353a, 0.94);
+      addRect(-30, 34, 46, 16, 0x2b353a, 0.94);
+      addRect(-50, -10, 34, 62, 0x4a575c, 0.9, 0.12);
+      addRect(76, 16, 38, 16, 0x4a575c, 0.9, -0.08);
+      addRect(-22, 49, 34, 14, 0xffd46a, 0.72);
+      addRect(62, 49, 34, 14, 0xffd46a, 0.72);
+    }
+
+    return parts;
   }
 
   private firePlayerWeapon(player: PlayerUnit, time: number): void {
@@ -2963,14 +3305,33 @@ export class BattleScene extends Phaser.Scene {
     const available = player.ammo[weapon.kind] ?? 0;
     if (available >= weapon.ammoCost) {
       player.ammo[weapon.kind] = available - weapon.ammoCost;
+      if (player.ammo[weapon.kind] < weapon.ammoCost) {
+        this.switchToPreviousAvailableWeapon(player, weapon);
+      }
       return true;
     }
 
     player.nextFireAt = time + 340;
-    this.showBanner(`${weapon.label} empty. Switching to Rifle.`, player.accent);
-    player.weaponIndex = Math.max(0, player.weapons.indexOf('rifle'));
+    this.switchToPreviousAvailableWeapon(player, weapon);
     this.emitHud('live');
     return false;
+  }
+
+  private switchToPreviousAvailableWeapon(player: PlayerUnit, exhaustedWeapon: WeaponSpec): void {
+    const currentIndex = Math.max(0, player.weapons.indexOf(exhaustedWeapon.kind));
+    for (let index = currentIndex - 1; index >= 0; index -= 1) {
+      const candidate = WEAPONS[player.weapons[index]];
+      if (candidate.maxAmmo < 0 || (player.ammo[candidate.kind] ?? 0) >= Math.max(1, candidate.ammoCost)) {
+        player.weaponIndex = index;
+        this.showBanner(`${exhaustedWeapon.label} empty. Switching to ${candidate.label}.`, player.accent);
+        this.emitHud('live');
+        return;
+      }
+    }
+
+    player.weaponIndex = Math.max(0, player.weapons.indexOf('rifle'));
+    this.showBanner(`${exhaustedWeapon.label} empty. Switching to Rifle.`, player.accent);
+    this.emitHud('live');
   }
 
   private switchWeapon(player: PlayerUnit): void {
@@ -3566,6 +3927,64 @@ export class BattleScene extends Phaser.Scene {
     this.emitHud('live');
   }
 
+  private handleRescueBunker(playerObject: Phaser.GameObjects.GameObject, bunkerObject: Phaser.GameObjects.GameObject): void {
+    const player = playerObject.getData('actor') as PlayerUnit | undefined;
+    const bunkerId = String(bunkerObject.getData('rescueBunkerId') ?? '');
+    const bunker = this.rescueBunkers.find((entry) => entry.id === bunkerId);
+    if (!this.shadowSquadMode || !player?.alive || !bunker || bunker.rescued) {
+      return;
+    }
+
+    bunker.rescued = true;
+    bunker.body.setFillStyle(0x273f36, 0.82);
+    bunker.marker.setText('FREE');
+    bunker.marker.setColor('#aef7c7');
+    bunker.linkedObjects.forEach((object) => {
+      (object as unknown as Phaser.GameObjects.Components.Alpha).setAlpha(0.42);
+    });
+    this.spawnRescuedAlly(bunker.body.x + 44, bunker.body.y, player);
+    this.showBanner('Captured soldier rescued. Shadow rifle joined.', player.accent);
+    this.emitHud('live');
+  }
+
+  private spawnRescuedAlly(x: number, y: number, leader: PlayerUnit): void {
+    const id = `ally-${this.allies.length + 1}`;
+    const sprite = this.physics.add.sprite(x, y, 'player-idle', 0);
+    sprite.setDepth(11);
+    sprite.setTint(0x9ed8ff);
+    sprite.setAlpha(0.9);
+    sprite.setDrag(760, 760);
+    sprite.setCollideWorldBounds(true);
+    this.configureBody(sprite, 18, 14);
+    sprite.play(animationKey('player-idle'));
+    this.allyGroup?.add(sprite);
+
+    const label = this.add.text(x, y - 28, `S${this.allies.length + 1}`, {
+      fontFamily: 'Impact, Haettenschweiler, sans-serif',
+      fontSize: '14px',
+      color: '#dff7ff',
+      stroke: '#102027',
+      strokeThickness: 3,
+    }).setOrigin(0.5).setDepth(12);
+
+    const ally: AllyUnit = {
+      id,
+      sprite,
+      label,
+      alive: true,
+      nextFireAt: this.time.now + Phaser.Math.Between(220, 620),
+      followOffset: new Phaser.Math.Vector2(
+        Phaser.Math.Between(-38, 38),
+        Phaser.Math.Between(-48, 48),
+      ),
+    };
+
+    sprite.setData('actorKind', 'ally');
+    sprite.setData('actor', ally);
+    this.allies.push(ally);
+    sprite.setRotation(leader.aim.angle());
+  }
+
   private handleVehicleEntry(playerObject: Phaser.GameObjects.GameObject, vehicleObject: Phaser.GameObjects.GameObject): void {
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
     const vehicle = vehicleObject.getData('vehicle') as VehicleUnit | undefined;
@@ -3577,7 +3996,9 @@ export class BattleScene extends Phaser.Scene {
     vehicle.driver = player;
     player.sprite.setAlpha(0.46);
     player.sprite.setPosition(vehicle.body.x, vehicle.body.y);
-    this.showBanner(`${player.label} entered ${vehicle.kind.toUpperCase()}. Jump exits.`, player.accent);
+    const boarded = this.boardNearbyAllies(vehicle);
+    const teamText = boarded > 0 ? ` ${boarded} rescued soldier${boarded === 1 ? '' : 's'} boarded.` : '';
+    this.showBanner(`${player.label} entered ${vehicle.kind.toUpperCase()}.${teamText} Jump exits.`, player.accent);
   }
 
   private handleVehicleHit(bulletObject: Phaser.GameObjects.GameObject, vehicleObject: Phaser.GameObjects.GameObject): void {
@@ -3625,8 +4046,11 @@ export class BattleScene extends Phaser.Scene {
     const driver = vehicle.driver;
     if (driver) {
       this.exitVehicle(driver, false);
+    } else {
+      this.unloadVehicleAllies(vehicle);
     }
     vehicle.driver = undefined;
+    vehicle.passengerAllies = [];
     (vehicle.body.body as Phaser.Physics.Arcade.Body).enable = false;
     vehicle.body.setFillStyle(vehicle.brokenTint, 0.74);
     this.setVehicleVisualTint(vehicle, 'broken');
@@ -3723,12 +4147,20 @@ export class BattleScene extends Phaser.Scene {
   private damageBoss(boss: BossUnit, amount: number): void {
     boss.health -= amount;
     this.flashSprite(boss.sprite);
+    this.setBossVisualTint(boss, 'hit');
+    this.time.delayedCall(75, () => {
+      if (boss.alive) {
+        this.setBossVisualTint(boss, 'base');
+      }
+    });
 
     if (boss.health > 0) {
       return;
     }
 
     boss.alive = false;
+    this.setBossVisualTint(boss, 'broken');
+    boss.visualParts.forEach((part) => part.object.destroy());
     boss.sprite.destroy();
     this.director.addScore(1000);
     this.activeEncounterLabel = `${boss.config.name} destroyed`;
