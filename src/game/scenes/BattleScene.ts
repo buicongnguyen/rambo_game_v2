@@ -4256,7 +4256,7 @@ export class BattleScene extends Phaser.Scene {
   private handleVehicleHit(bulletObject: Phaser.GameObjects.GameObject, vehicleObject: Phaser.GameObjects.GameObject): void {
     const bullet = bulletObject as Phaser.Physics.Arcade.Image;
     const vehicle = vehicleObject.getData('vehicle') as VehicleUnit | undefined;
-    if (!vehicle?.active || !bullet.active) {
+    if (!vehicle?.active || !vehicle.driver || !bullet.active) {
       return;
     }
 
@@ -4630,7 +4630,7 @@ export class BattleScene extends Phaser.Scene {
   private tryHitVehicleWithEnemyBullet(bullet: Phaser.Physics.Arcade.Image): boolean {
     const bulletBounds = bullet.getBounds();
     for (const vehicle of this.vehicles) {
-      if (!vehicle.active || !(vehicle.body.body as Phaser.Physics.Arcade.Body | undefined)?.enable) {
+      if (!vehicle.active || !vehicle.driver || !(vehicle.body.body as Phaser.Physics.Arcade.Body | undefined)?.enable) {
         continue;
       }
 
