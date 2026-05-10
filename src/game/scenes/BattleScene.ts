@@ -54,7 +54,7 @@ interface BulletEffectZone {
   label: string;
 }
 
-type TerrainEffect = 'water' | 'high';
+type TerrainEffect = 'water' | 'high' | 'hole';
 type VehicleKind = 'jeep' | 'tank' | 'motorcycle';
 
 interface TerrainZone {
@@ -109,12 +109,12 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     fireRate: 500,
     bulletSpeed: 430,
     damage: 44,
-    maxDistance: 700,
+    maxDistance: 760,
     maxAmmo: 36,
     pickupAmmo: 18,
     ammoCost: 1,
-    spread: 0.24,
-    pellets: 5,
+    spread: 0.3,
+    pellets: 6,
     scaleX: 1.65,
     scaleY: 1.25,
   },
@@ -126,12 +126,12 @@ const WEAPONS: Record<WeaponKind, WeaponSpec> = {
     fireRate: 95,
     bulletSpeed: 340,
     damage: 24,
-    maxDistance: 520,
+    maxDistance: 580,
     maxAmmo: 90,
     pickupAmmo: 45,
     ammoCost: 1,
-    spread: 0.12,
-    pellets: 4,
+    spread: 0.18,
+    pellets: 5,
     scaleX: 1.95,
     scaleY: 1.7,
   },
@@ -413,6 +413,7 @@ export class BattleScene extends Phaser.Scene {
   private enemyBullets?: Phaser.Physics.Arcade.Group;
   private weaponPickups?: Phaser.Physics.Arcade.StaticGroup;
   private healthPickups?: Phaser.Physics.Arcade.StaticGroup;
+  private supplyCrates?: Phaser.Physics.Arcade.StaticGroup;
   private vehicleGroup?: Phaser.Physics.Arcade.Group;
   private vehicles: VehicleUnit[] = [];
   private obstacleBodies: Phaser.GameObjects.Rectangle[] = [];
@@ -626,6 +627,7 @@ export class BattleScene extends Phaser.Scene {
     this.enemyBullets = this.physics.add.group();
     this.weaponPickups = this.physics.add.staticGroup();
     this.healthPickups = this.physics.add.staticGroup();
+    this.supplyCrates = this.physics.add.staticGroup();
     this.vehicleGroup = this.physics.add.group();
     this.obstacleBodies = [];
     this.bulletZones = [];
@@ -639,6 +641,7 @@ export class BattleScene extends Phaser.Scene {
     this.createObstacles(this.stage);
     this.createStageBoundaryWalls(this.stage);
     this.createBattlefieldCover(this.stage);
+    this.createSupplyCrates(this.stage);
     this.createWeaponPickups(this.stage);
     this.createHealthPickups(this.stage);
     this.createVehicles(this.stage);
@@ -780,6 +783,98 @@ export class BattleScene extends Phaser.Scene {
       },
     ];
 
+    if (stage.id.includes('river')) {
+      zones.push(
+        {
+          x: Math.floor(stage.worldWidth * 0.38),
+          y: Math.floor(stage.worldHeight * 0.33),
+          width: 440,
+          height: 120,
+          effect: 'water',
+          label: 'RIVER',
+          level: -1,
+          tint: waterTint,
+          alpha: 0.3,
+        },
+        {
+          x: Math.floor(stage.worldWidth * 0.68),
+          y: Math.floor(stage.worldHeight * 0.78),
+          width: 520,
+          height: 135,
+          effect: 'water',
+          label: 'SLOW',
+          level: -1,
+          tint: waterTint,
+          alpha: 0.34,
+        },
+      );
+    }
+
+    if (stage.id.includes('dust') || stage.id.includes('mesa')) {
+      zones.push(
+        {
+          x: Math.floor(stage.worldWidth * 0.36),
+          y: Math.floor(stage.worldHeight * 0.28),
+          width: 370,
+          height: 150,
+          effect: 'high',
+          label: 'MESA +2',
+          level: 2,
+          tint: 0xd29a4a,
+          alpha: 0.28,
+        },
+        {
+          x: Math.floor(stage.worldWidth * 0.62),
+          y: Math.floor(stage.worldHeight * 0.43),
+          width: 420,
+          height: 150,
+          effect: 'high',
+          label: 'HIGH +3',
+          level: 3,
+          tint: 0xe0b15f,
+          alpha: 0.29,
+        },
+      );
+    }
+
+    if (stage.id.includes('underground') || stage.id.includes('catacombs') || stage.id.includes('burrow')) {
+      zones.push(
+        {
+          x: Math.floor(stage.worldWidth * 0.34),
+          y: Math.floor(stage.worldHeight * 0.38),
+          width: 210,
+          height: 150,
+          effect: 'hole',
+          label: 'HOLE',
+          level: -2,
+          tint: 0x080907,
+          alpha: 0.48,
+        },
+        {
+          x: Math.floor(stage.worldWidth * 0.58),
+          y: Math.floor(stage.worldHeight * 0.76),
+          width: 250,
+          height: 165,
+          effect: 'hole',
+          label: 'SINK',
+          level: -2,
+          tint: 0x090a08,
+          alpha: 0.5,
+        },
+        {
+          x: Math.floor(stage.worldWidth * 0.82),
+          y: Math.floor(stage.worldHeight * 0.42),
+          width: 220,
+          height: 150,
+          effect: 'hole',
+          label: 'HOLE',
+          level: -2,
+          tint: 0x090a08,
+          alpha: 0.46,
+        },
+      );
+    }
+
     for (const zone of zones) {
       const bounds = new Phaser.Geom.Rectangle(
         zone.x - zone.width * 0.5,
@@ -821,6 +916,19 @@ export class BattleScene extends Phaser.Scene {
             5,
             0xb9f7ff,
             0.26,
+          ).setDepth(-11);
+        }
+      }
+
+      if (zone.effect === 'hole') {
+        panel.setAngle(Phaser.Math.Between(-3, 3));
+        for (let index = 0; index < 4; index += 1) {
+          this.add.circle(
+            zone.x + Phaser.Math.Between(-Math.floor(zone.width * 0.32), Math.floor(zone.width * 0.32)),
+            zone.y + Phaser.Math.Between(-Math.floor(zone.height * 0.28), Math.floor(zone.height * 0.28)),
+            Phaser.Math.Between(10, 22),
+            0x000000,
+            0.3,
           ).setDepth(-11);
         }
       }
@@ -906,8 +1014,8 @@ export class BattleScene extends Phaser.Scene {
       encounter.enemies.forEach((spawn, index) => {
         const doorSide = index % 2 === 0 ? -1 : 1;
         const concrete = spawn.kind === 'turret' || index % 4 === 3;
-        const width = concrete ? 82 : 72;
-        const height = concrete ? 58 : 52;
+        const width = concrete ? 86 : 72;
+        const height = concrete ? 36 : 52;
         const housePosition = this.findOpenCoverSpot(
           spawn.x + doorSide * Phaser.Math.Between(42, 74),
           Phaser.Math.Clamp(spawn.y + Phaser.Math.Between(-28, 28), 90, stage.worldHeight - 90),
@@ -955,14 +1063,53 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
-    for (let index = 0; index < 4; index += 1) {
-      const x = 620 + index * 460;
-      const y = index % 2 === 0 ? stage.worldHeight * 0.32 : stage.worldHeight * 0.72;
-      const concretePosition = this.findOpenCoverSpot(x, y, 96, 66, stage, 18);
+    for (let index = 0; index < 8; index += 1) {
+      const x = 520 + index * 285;
+      const y = index % 2 === 0 ? stage.worldHeight * 0.28 : stage.worldHeight * 0.74;
+      const width = index % 3 === 0 ? 116 : 86;
+      const height = index % 3 === 0 ? 26 : 34;
+      const concretePosition = this.findOpenCoverSpot(x, y, width, height, stage, 18);
       if (concretePosition) {
-        this.createBlocker(concretePosition.x, concretePosition.y, 96, 66, 0x6f777b, 0.98, 'CONCRETE');
+        this.createBlocker(concretePosition.x, concretePosition.y, width, height, 0x6f777b, 0.98, index % 2 === 0 ? 'COVER' : undefined);
       }
     }
+  }
+
+  private createSupplyCrates(stage: StageConfig): void {
+    const stageNumber = this.getStageNumber(stage);
+    const crates = [
+      { x: Math.floor(stage.worldWidth * 0.22), y: stage.worldHeight * 0.5 - 214 + stageNumber * 7 },
+      { x: Math.floor(stage.worldWidth * 0.46), y: stage.worldHeight * 0.5 + 196 - stageNumber * 9 },
+      { x: Math.floor(stage.worldWidth * 0.72), y: stage.worldHeight * 0.5 - 206 + (stageNumber % 4) * 18 },
+    ];
+
+    for (const [index, crate] of crates.entries()) {
+      const position = this.findOpenCoverSpot(crate.x, crate.y, 46, 34, stage, 16) ?? crate;
+      this.createBreakableSupplyCrate(position.x, position.y, stage, index);
+    }
+  }
+
+  private createBreakableSupplyCrate(x: number, y: number, stage: StageConfig, index: number): void {
+    const crate = this.add.rectangle(x, y, 46, 34, 0x8a623c, 0.96);
+    crate.setDepth(8);
+    crate.setStrokeStyle(2, 0xffe6a8, 0.42);
+    crate.setData('stageId', stage.id);
+    crate.setData('crateIndex', index);
+    this.physics.add.existing(crate, true);
+    this.supplyCrates?.add(crate);
+
+    const trimTint = index % 2 === 0 ? 0x4a3320 : 0x5d4026;
+    const strapA = this.add.rectangle(x, y, 7, 34, trimTint, 0.8).setDepth(9);
+    const strapB = this.add.rectangle(x, y, 46, 5, 0xf0cb77, 0.42).setDepth(9);
+    const shine = this.add.rectangle(x - 12, y - 9, 18, 4, 0xffefbd, 0.22).setDepth(9).setAngle(-8);
+    const stamp = this.add.text(x + 10, y + 4, '?', {
+      fontFamily: 'Impact, Haettenschweiler, sans-serif',
+      fontSize: '19px',
+      color: '#21140b',
+      stroke: '#ffe6a8',
+      strokeThickness: 2,
+    }).setOrigin(0.5).setDepth(10);
+    crate.setData('linkedObjects', [strapA, strapB, shine, stamp]);
   }
 
   private findOpenCoverSpot(
@@ -1072,9 +1219,9 @@ export class BattleScene extends Phaser.Scene {
 
   private createWeaponPickupCrate(kind: WeaponKind, x: number, y: number, stageId: string): void {
     const spec = WEAPONS[kind];
-    const crate = this.add.rectangle(x, y, 56, 38, spec.tint, 0.92);
+    const crate = this.add.rectangle(x, y, 58, 40, spec.tint, 0.92);
     crate.setDepth(9);
-    crate.setStrokeStyle(2, 0xffffff, 0.34);
+    crate.setStrokeStyle(3, 0xffffff, 0.38);
     crate.setData('weaponKind', kind);
     crate.setData('respawnX', x);
     crate.setData('respawnY', y);
@@ -1082,14 +1229,23 @@ export class BattleScene extends Phaser.Scene {
     this.physics.add.existing(crate, true);
     this.weaponPickups?.add(crate);
 
+    const shadow = this.add.rectangle(x + 3, y + 4, 52, 30, 0x000000, 0.18).setDepth(8);
+    const lid = this.add.rectangle(x, y - 12, 52, 8, 0xffffff, 0.2).setDepth(10);
+    const leftStrap = this.add.rectangle(x - 19, y, 5, 34, 0x15150f, 0.32).setDepth(10);
+    const rightStrap = this.add.rectangle(x + 19, y, 5, 34, 0x15150f, 0.32).setDepth(10);
+    const cornerA = this.add.rectangle(x - 20, y - 13, 10, 5, 0xfff6cf, 0.5).setDepth(10);
+    const cornerB = this.add.rectangle(x + 20, y + 13, 10, 5, 0x0b0f0c, 0.28).setDepth(10);
+    const iconBack = this.add.rectangle(x, y, 30, 25, 0xfff2c4, 0.86).setDepth(10);
+    iconBack.setStrokeStyle(1, 0x11180f, 0.35);
     const label = this.add.text(x, y - 1, this.getWeaponIcon(kind), {
       fontFamily: 'Impact, Haettenschweiler, sans-serif',
       fontSize: '27px',
       color: '#09100b',
       stroke: '#fff6c8',
       strokeThickness: 2,
-    }).setOrigin(0.5).setDepth(10);
+    }).setOrigin(0.5).setDepth(11);
     crate.setData('labelObject', label);
+    crate.setData('linkedObjects', [shadow, lid, leftStrap, rightStrap, cornerA, cornerB, iconBack, label]);
   }
 
   private getWeaponIcon(kind: WeaponKind): string {
@@ -1120,17 +1276,24 @@ export class BattleScene extends Phaser.Scene {
 
     for (const pickup of pickups) {
       const position = this.findOpenCoverSpot(pickup.x, pickup.y, 44, 44, stage, 12) ?? pickup;
-      const box = this.add.rectangle(position.x, position.y, 44, 44, 0xf5efe2, 0.96);
-      box.setDepth(9);
-      box.setStrokeStyle(3, 0xb01818, 0.86);
-      box.setData('healAmount', 35);
-      this.physics.add.existing(box, true);
-      this.healthPickups?.add(box);
-
-      const crossH = this.add.rectangle(position.x, position.y, 30, 9, 0xd51f1f, 1).setDepth(10);
-      const crossV = this.add.rectangle(position.x, position.y, 9, 30, 0xd51f1f, 1).setDepth(10);
-      box.setData('linkedObjects', [crossH, crossV]);
+      this.createHealthPickupBox(position.x, position.y, 35);
     }
+  }
+
+  private createHealthPickupBox(x: number, y: number, healAmount: number): void {
+    const box = this.add.rectangle(x, y, 44, 44, 0xf5efe2, 0.96);
+    box.setDepth(9);
+    box.setStrokeStyle(3, 0xb01818, 0.86);
+    box.setData('healAmount', healAmount);
+    this.physics.add.existing(box, true);
+    this.healthPickups?.add(box);
+
+    const shadow = this.add.rectangle(x + 3, y + 4, 36, 34, 0x000000, 0.12).setDepth(8);
+    const lid = this.add.rectangle(x, y - 14, 34, 5, 0xffffff, 0.32).setDepth(10);
+    const crossH = this.add.rectangle(x, y, 30, 9, 0xd51f1f, 1).setDepth(10);
+    const crossV = this.add.rectangle(x, y, 9, 30, 0xd51f1f, 1).setDepth(10);
+    const latch = this.add.rectangle(x + 16, y + 14, 8, 5, 0x921313, 0.86).setDepth(10);
+    box.setData('linkedObjects', [shadow, lid, crossH, crossV, latch]);
   }
 
   private createVehicles(stage: StageConfig): void {
@@ -1259,7 +1422,7 @@ export class BattleScene extends Phaser.Scene {
         fireVisualUntil: 0,
         contactReadyAt: 0,
         aimAssistShots: 0,
-        rifleAimAssistEvery: Phaser.Math.Between(3, 5),
+        rifleAimAssistEvery: 2,
         weaponIndex: 0,
         weapons: ['rifle'],
         ammo: {
@@ -1321,6 +1484,9 @@ export class BattleScene extends Phaser.Scene {
     });
     this.physics.add.overlap(this.playerBullets!, this.bossGroup!, (bullet, boss) => {
       this.handleBossHit(bullet as Phaser.GameObjects.GameObject, boss as Phaser.GameObjects.GameObject);
+    });
+    this.physics.add.collider(this.playerBullets!, this.supplyCrates!, (bullet, crate) => {
+      this.handleSupplyCrateHit(bullet as Phaser.GameObjects.GameObject, crate as Phaser.GameObjects.GameObject);
     });
     this.physics.add.overlap(this.enemyBullets!, this.playerGroup!, (bullet, player) => {
       this.handlePlayerHit(bullet as Phaser.GameObjects.GameObject, player as Phaser.GameObjects.GameObject);
@@ -1500,6 +1666,8 @@ export class BattleScene extends Phaser.Scene {
           speed = wantsFire ? player.walkSpeed : player.moveSpeed;
           if (terrain?.effect === 'water') {
             speed *= 0.58;
+          } else if (terrain?.effect === 'hole') {
+            speed *= 0.46;
           } else if (terrain?.effect === 'high') {
             speed *= 0.94;
           }
@@ -2125,7 +2293,7 @@ export class BattleScene extends Phaser.Scene {
 
   private triggerEncounter(state: EncounterState): void {
     state.triggered = true;
-    state.remaining = state.config.enemies.length;
+    state.remaining = this.getEncounterEnemyTotal(state.config);
     this.activeEncounterLabel = state.config.label;
     this.showBanner(state.config.label, '#f3d088');
 
@@ -2133,11 +2301,30 @@ export class BattleScene extends Phaser.Scene {
       const door = this.spawnDoors.get(spawn.id);
       this.time.delayedCall(index * 360, () => {
         this.spawnEnemy(spawn.kind, spawn.id, door?.x ?? spawn.x, door?.y ?? spawn.y, state.config.id, spawn.x, spawn.y);
+        if (spawn.kind === 'zombie') {
+          const duplicateOffset = index % 2 === 0 ? -42 : 42;
+          this.time.delayedCall(180, () => {
+            this.spawnEnemy(
+              'zombie',
+              `${spawn.id}-extra`,
+              door?.x ?? spawn.x + duplicateOffset,
+              door?.y ?? spawn.y,
+              state.config.id,
+              Phaser.Math.Clamp(spawn.x + duplicateOffset, 48, (this.stage?.worldWidth ?? 2600) - 48),
+              Phaser.Math.Clamp(spawn.y + (index % 3 - 1) * 34, 60, (this.stage?.worldHeight ?? 920) - 60),
+            );
+          });
+        }
       });
       if (door) {
         this.flashSpawnDoor(door);
       }
     });
+  }
+
+  private getEncounterEnemyTotal(encounter: EncounterConfig): number {
+    const zombies = encounter.enemies.filter((enemy) => enemy.kind === 'zombie').length;
+    return encounter.enemies.length + zombies;
   }
 
   private flashSpawnDoor(door: SpawnDoor): void {
@@ -2184,7 +2371,7 @@ export class BattleScene extends Phaser.Scene {
       health: kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
       maxHealth: kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
       alive: true,
-      moveSpeed: kind === 'scout' ? 96 : kind === 'zombie' ? 82 : kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
+      moveSpeed: kind === 'scout' ? 96 : kind === 'zombie' ? 96 : kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
       fireRate: kind === 'scout' ? 1520 : kind === 'rocketeer' ? 1400 : kind === 'turret' ? 1050 : 900,
       bulletSpeed: kind === 'scout' ? 280 : kind === 'rocketeer' ? 265 : kind === 'turret' ? 340 : 300,
       damage: kind === 'scout' ? 14 : kind === 'zombie' ? 8 : kind === 'rocketeer' ? 18 : kind === 'turret' ? 12 : 10,
@@ -2329,22 +2516,19 @@ export class BattleScene extends Phaser.Scene {
     direction: Phaser.Math.Vector2,
   ): Phaser.Math.Vector2 {
     const baseDirection = direction.clone().normalize();
-    let thresholdDegrees = 0;
     let shouldAssist = false;
+    const isRhythmAssistWeapon = weapon.kind === 'rifle' || weapon.kind === 'machineGun';
 
     if (weapon.kind === 'sniper') {
-      thresholdDegrees = 9;
       shouldAssist = true;
-    } else if (weapon.kind === 'rifle') {
+    } else if (isRhythmAssistWeapon) {
       player.aimAssistShots += 1;
-      if (player.aimAssistShots >= player.rifleAimAssistEvery) {
-        thresholdDegrees = 5;
+      if (player.aimAssistShots >= 2) {
         shouldAssist = true;
         player.aimAssistShots = 0;
-        player.rifleAimAssistEvery = Phaser.Math.Between(3, 5);
+        player.rifleAimAssistEvery = 2;
       }
     } else if (weapon.pellets === 1) {
-      thresholdDegrees = 6;
       shouldAssist = true;
     }
 
@@ -2352,7 +2536,7 @@ export class BattleScene extends Phaser.Scene {
       return baseDirection;
     }
 
-    const target = this.findAimAssistTarget(player.sprite.x, player.sprite.y, baseDirection, weapon.maxDistance, thresholdDegrees);
+    const target = this.findAimAssistTarget(player.sprite.x, player.sprite.y, baseDirection, weapon);
     if (!target) {
       return baseDirection;
     }
@@ -2364,8 +2548,7 @@ export class BattleScene extends Phaser.Scene {
     x: number,
     y: number,
     direction: Phaser.Math.Vector2,
-    maxDistance: number,
-    thresholdDegrees: number,
+    weapon: WeaponSpec,
   ): { x: number; y: number } | undefined {
     const aimAngle = direction.angle();
     let bestTarget: { x: number; y: number } | undefined;
@@ -2373,7 +2556,7 @@ export class BattleScene extends Phaser.Scene {
 
     const considerTarget = (targetX: number, targetY: number, radius: number): void => {
       const distance = Phaser.Math.Distance.Between(x, y, targetX, targetY);
-      if (distance > maxDistance + radius || distance < 10) {
+      if (distance > weapon.maxDistance + radius || distance < 10) {
         return;
       }
 
@@ -2383,12 +2566,12 @@ export class BattleScene extends Phaser.Scene {
 
       const angle = Phaser.Math.Angle.Between(x, y, targetX, targetY);
       const angleDiff = Math.abs(Phaser.Math.Angle.Wrap(angle - aimAngle));
-      const threshold = this.getDistanceScaledAimAssistThreshold(thresholdDegrees, distance, maxDistance, radius);
+      const threshold = this.getDistanceScaledAimAssistThreshold(weapon, distance, radius);
       if (angleDiff > threshold) {
         return;
       }
 
-      const score = (angleDiff / Math.max(threshold, 0.001)) * 10000 + distance;
+      const score = distance + (angleDiff / Math.max(threshold, 0.001)) * 80;
       if (score < bestScore) {
         bestScore = score;
         bestTarget = { x: targetX, y: targetY };
@@ -2411,16 +2594,31 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private getDistanceScaledAimAssistThreshold(
-    baseThresholdDegrees: number,
+    weapon: WeaponSpec,
     distance: number,
-    maxDistance: number,
     targetRadius: number,
   ): number {
-    const assistFalloffRange = Math.max(180, Math.min(maxDistance, 720));
-    const closeDistance = Math.max(0, distance - targetRadius * 2);
-    const closeness = 1 - Phaser.Math.Clamp(closeDistance / assistFalloffRange, 0, 1);
-    const closeBonusDegrees = 25 * closeness;
-    return Phaser.Math.DegToRad(baseThresholdDegrees + closeBonusDegrees);
+    const effectiveDistance = Math.max(0, distance - targetRadius);
+    const closeLimit = weapon.kind === 'sniper' ? 260 : 240;
+    const mediumLimit = weapon.kind === 'sniper' ? 720 : 560;
+
+    if (weapon.kind === 'sniper') {
+      if (effectiveDistance <= closeLimit) {
+        return Phaser.Math.DegToRad(15);
+      }
+      if (effectiveDistance <= mediumLimit) {
+        return Phaser.Math.DegToRad(10);
+      }
+      return Phaser.Math.DegToRad(6);
+    }
+
+    if (effectiveDistance <= closeLimit) {
+      return Phaser.Math.DegToRad(34);
+    }
+    if (effectiveDistance <= mediumLimit) {
+      return Phaser.Math.DegToRad(18);
+    }
+    return Phaser.Math.DegToRad(8);
   }
 
   private findClearBulletStart(x: number, y: number, direction: Phaser.Math.Vector2): { x: number; y: number } {
@@ -3009,6 +3207,39 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private handleSupplyCrateHit(bulletObject: Phaser.GameObjects.GameObject, crateObject: Phaser.GameObjects.GameObject): void {
+    const bullet = bulletObject as Phaser.Physics.Arcade.Image;
+    const crate = crateObject as Phaser.GameObjects.Rectangle;
+    if (!crate.active || !bullet.active) {
+      return;
+    }
+
+    const x = crate.x;
+    const y = crate.y;
+    const stage = this.stage ?? this.director.getSnapshot().currentStage;
+    const crateIndex = Number(crate.getData('crateIndex') ?? 0);
+    const linkedObjects = crate.getData('linkedObjects') as Phaser.GameObjects.GameObject[] | undefined;
+    linkedObjects?.forEach((object) => object.destroy());
+    crate.destroy();
+    this.resolvePlayerBulletImpact(bullet, x, y);
+    this.createHitSpark(x, y, 0xffe6a8, 'SUPPLY');
+
+    if ((this.getStageNumber(stage) + crateIndex) % 3 === 0) {
+      this.createHealthPickupBox(x, y, 45);
+      this.showBanner('Supply box opened: health pack', '#f4e6d5');
+      return;
+    }
+
+    const reward = this.getSupplyCrateWeapon(stage, crateIndex);
+    this.createWeaponPickupCrate(reward, x, y, stage.id);
+    this.showBanner(`Supply box opened: ${WEAPONS[reward].label}`, '#f4e6d5');
+  }
+
+  private getSupplyCrateWeapon(stage: StageConfig, crateIndex: number): WeaponKind {
+    const rewards: WeaponKind[] = ['machineGun', 'shotgun', 'flame', 'sniper', 'missile', 'explosiveArrow', 'poisonBomb'];
+    return rewards[(this.getStageNumber(stage) + crateIndex) % rewards.length];
+  }
+
   private handleWeaponPickup(playerObject: Phaser.GameObjects.GameObject, pickupObject: Phaser.GameObjects.GameObject): void {
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
     const pickup = pickupObject as Phaser.GameObjects.Rectangle;
@@ -3029,8 +3260,8 @@ export class BattleScene extends Phaser.Scene {
     const respawnX = Number(pickup.getData('respawnX') ?? pickup.x);
     const respawnY = Number(pickup.getData('respawnY') ?? pickup.y);
     const stageId = String(pickup.getData('stageId') ?? this.stage?.id ?? '');
-    const label = pickup.getData('labelObject') as Phaser.GameObjects.Text | undefined;
-    label?.destroy();
+    const linkedObjects = pickup.getData('linkedObjects') as Phaser.GameObjects.GameObject[] | undefined;
+    linkedObjects?.forEach((object) => object.destroy());
     pickup.destroy();
     this.scheduleWeaponPickupRespawn(weaponKind, respawnX, respawnY, stageId);
 
@@ -3635,12 +3866,12 @@ export class BattleScene extends Phaser.Scene {
     const stage = this.stage ?? this.getPreviewStage(snapshot);
     const clearedEncounters = this.encounterStates.filter((state) => state.cleared).length;
     const totalEncounters = this.encounterStates.length || stage.encounters.length;
-    const totalStageEnemies = stage.encounters.reduce((sum, encounter) => sum + encounter.enemies.length, 0);
+    const totalStageEnemies = stage.encounters.reduce((sum, encounter) => sum + this.getEncounterEnemyTotal(encounter), 0);
     const defeatedEnemies = this.encounterStates.reduce((sum, state) => {
       if (!state.triggered) {
         return sum;
       }
-      return sum + Math.max(0, state.config.enemies.length - state.remaining);
+      return sum + Math.max(0, this.getEncounterEnemyTotal(state.config) - state.remaining);
     }, 0);
     const remainingEnemies = Math.max(0, totalStageEnemies - defeatedEnemies);
     const progressText = this.bossSpawned

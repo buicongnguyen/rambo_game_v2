@@ -60,7 +60,13 @@ export class InterfaceController {
       objective: fallbackStage.objective,
       encounterLabel: 'Awaiting deployment order',
       progressText: 'Standby',
-      enemyCount: { alive: 0, total: fallbackStage.encounters.reduce((sum, encounter) => sum + encounter.enemies.length, 0) },
+      enemyCount: {
+        alive: 0,
+        total: fallbackStage.encounters.reduce(
+          (sum, encounter) => sum + encounter.enemies.length + encounter.enemies.filter((enemy) => enemy.kind === 'zombie').length,
+          0,
+        ),
+      },
       totalScore: this.sessionSnapshot.totalScore,
       players: [],
     };
