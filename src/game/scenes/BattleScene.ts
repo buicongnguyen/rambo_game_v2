@@ -64,11 +64,22 @@ interface TerrainZone {
   height: number;
 }
 
+interface VehicleVisualPart {
+  object: Phaser.GameObjects.Shape;
+  offsetX: number;
+  offsetY: number;
+  rotationOffset: number;
+  baseTint: number;
+  brokenTint: number;
+  alpha: number;
+}
+
 interface VehicleUnit {
   kind: VehicleKind;
   body: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
   hpLabel: Phaser.GameObjects.Text;
+  visualParts: VehicleVisualPart[];
   driver?: PlayerUnit;
   hp: number;
   maxHp: number;
@@ -348,6 +359,7 @@ interface EnemyUnit {
   kind: EnemyKind;
   theme: StageThemeId;
   sprite: Phaser.Physics.Arcade.Sprite;
+  visualParts?: VehicleVisualPart[];
   health: number;
   maxHealth: number;
   alive: boolean;
@@ -1169,6 +1181,25 @@ export class BattleScene extends Phaser.Scene {
     this.physics.add.existing(rect, true);
     this.obstacleBodies.push(rect);
 
+    this.add.rectangle(x + 5, y + 5, width * 0.92, height * 0.76, 0x000000, 0.1).setDepth(4);
+    this.add.rectangle(x - width * 0.18, y - height * 0.18, width * 0.46, Math.max(4, height * 0.16), 0xffffff, 0.08)
+      .setDepth(6)
+      .setAngle(-3);
+    this.add.rectangle(x + width * 0.22, y + height * 0.18, width * 0.38, Math.max(4, height * 0.13), 0x10130f, 0.14)
+      .setDepth(6)
+      .setAngle(4);
+    const crackTint = tint === 0x6f777b || tint === 0x777f86 ? 0x30363a : 0x372615;
+    for (let index = 0; index < 3; index += 1) {
+      this.add.rectangle(
+        x + Phaser.Math.Between(-Math.floor(width * 0.32), Math.floor(width * 0.32)),
+        y + Phaser.Math.Between(-Math.floor(height * 0.28), Math.floor(height * 0.28)),
+        Phaser.Math.Between(14, Math.max(16, Math.floor(width * 0.32))),
+        3,
+        crackTint,
+        0.3,
+      ).setDepth(6).setAngle(Phaser.Math.Between(-28, 28));
+    }
+
     if (label) {
       this.add.text(x, y - 5, label, {
         fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
@@ -1181,17 +1212,25 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createTreeCover(x: number, y: number, stage: StageConfig): void {
-    const trunk = this.add.rectangle(x, y + 4, 52, 58, 0x4c321e, 0.38);
+    this.add.ellipse(x + 6, y + 18, 76, 46, 0x071009, 0.22).setDepth(4);
+    const trunk = this.add.rectangle(x, y + 10, 34, 66, 0x4c321e, 0.48);
     trunk.setDepth(5);
+    trunk.setStrokeStyle(2, 0x2b1b11, 0.5);
     this.physics.add.existing(trunk, true);
     this.obstacleBodies.push(trunk);
 
     const canopyTint = stage.theme === 'river' ? 0x2d6d42 : 0x2f7b35;
-    for (const [offsetX, offsetY, radius] of [[0, -20, 34], [-22, -6, 25], [22, -4, 25], [0, 8, 28]] as const) {
+    for (const [offsetX, offsetY, radius, alpha] of [[0, -24, 38, 0.82], [-27, -9, 27, 0.76], [27, -8, 28, 0.78], [-10, 12, 28, 0.72], [15, 12, 30, 0.72]] as const) {
       this.add.circle(x + offsetX, y + offsetY, radius, canopyTint, 0.78)
         .setDepth(6)
         .setStrokeStyle(2, 0x153f1d, 0.4);
+      this.add.circle(x + offsetX - radius * 0.18, y + offsetY - radius * 0.22, radius * 0.34, 0x68a75c, alpha * 0.35)
+        .setDepth(7);
     }
+    this.add.rectangle(x - 9, y + 7, 5, 54, 0x735236, 0.48).setDepth(6).setAngle(-5);
+    this.add.rectangle(x + 12, y + 12, 4, 48, 0x2a190f, 0.36).setDepth(6).setAngle(7);
+    this.add.rectangle(x - 18, y + 43, 30, 5, 0x3a2415, 0.42).setDepth(6).setAngle(-16);
+    this.add.rectangle(x + 20, y + 44, 28, 5, 0x3a2415, 0.38).setDepth(6).setAngle(18);
   }
 
   private createWeaponPickups(stage: StageConfig): void {
@@ -1313,6 +1352,7 @@ export class BattleScene extends Phaser.Scene {
       const body = this.add.rectangle(position.x, position.y, spec.width, spec.height, spec.tint, 0.96);
       body.setDepth(10);
       body.setStrokeStyle(3, 0xf4e5b6, 0.42);
+      body.setAlpha(0.2);
       this.physics.add.existing(body);
       const physicsBody = body.body as Phaser.Physics.Arcade.Body;
       physicsBody.setSize(spec.width, spec.height);
@@ -1340,6 +1380,7 @@ export class BattleScene extends Phaser.Scene {
         body,
         label,
         hpLabel,
+        visualParts: [],
         hp: spec.hp,
         maxHp: spec.hp,
         speed: spec.speed,
@@ -1352,9 +1393,167 @@ export class BattleScene extends Phaser.Scene {
         brokenTint: spec.brokenTint,
         ammoLabel: spec.ammoLabel,
       };
+      vehicle.visualParts = this.createVehicleVisualParts(vehicle, spec.tint, spec.brokenTint);
+      this.syncVehicleVisuals(vehicle);
       body.setData('vehicle', vehicle);
       this.vehicles.push(vehicle);
     }
+  }
+
+  private createVehicleVisualParts(vehicle: VehicleUnit, baseTint: number, brokenTint: number): VehicleVisualPart[] {
+    const parts: VehicleVisualPart[] = [];
+    const addRect = (
+      offsetX: number,
+      offsetY: number,
+      width: number,
+      height: number,
+      tint: number,
+      alpha = 1,
+      rotationOffset = 0,
+      depth = 11,
+      brokenPartTint = brokenTint,
+    ): Phaser.GameObjects.Rectangle => {
+      const rect = this.add.rectangle(vehicle.body.x, vehicle.body.y, width, height, tint, alpha);
+      rect.setDepth(depth);
+      rect.setStrokeStyle(1, 0xf7e7b4, 0.18);
+      parts.push({ object: rect, offsetX, offsetY, rotationOffset, baseTint: tint, brokenTint: brokenPartTint, alpha });
+      return rect;
+    };
+    const addCircle = (
+      offsetX: number,
+      offsetY: number,
+      radius: number,
+      tint: number,
+      alpha = 1,
+      depth = 11,
+      brokenPartTint = brokenTint,
+    ): Phaser.GameObjects.Arc => {
+      const circle = this.add.circle(vehicle.body.x, vehicle.body.y, radius, tint, alpha);
+      circle.setDepth(depth);
+      circle.setStrokeStyle(2, 0x11140f, 0.55);
+      parts.push({ object: circle, offsetX, offsetY, rotationOffset: 0, baseTint: tint, brokenTint: brokenPartTint, alpha });
+      return circle;
+    };
+
+    if (vehicle.kind === 'motorcycle') {
+      addCircle(-23, 0, 9, 0x171a16, 1, 10);
+      addCircle(24, 0, 9, 0x171a16, 1, 10);
+      addRect(0, 0, 42, 6, 0x2a2d25, 0.96, 0, 11);
+      addRect(-5, -4, 20, 8, baseTint, 1, -0.08, 12);
+      addRect(10, 4, 18, 5, 0xc9b28a, 0.86, 0.12, 12);
+      addRect(27, -6, 16, 4, 0x34382f, 0.95, 0.32, 12);
+      addRect(-22, 0, 12, 3, 0xd9d0a1, 0.75, 0.18, 12);
+      addRect(30, 0, 10, 3, 0xf5e3a4, 0.78, 0, 12);
+      return parts;
+    }
+
+    if (vehicle.kind === 'jeep') {
+      addRect(0, 0, 72, 38, 0x2b321f, 0.98, 0, 10);
+      addRect(10, 0, 42, 30, baseTint, 1, 0, 11);
+      addRect(27, 0, 25, 24, 0x4d5a32, 1, 0, 12);
+      addRect(-13, -2, 25, 24, 0x22291d, 0.96, 0, 12);
+      addRect(-14, -8, 18, 8, 0x93bfd0, 0.72, 0, 13);
+      addRect(-14, 8, 18, 8, 0x93bfd0, 0.56, 0, 13);
+      addRect(39, 0, 10, 28, 0x191d14, 0.96, 0, 12);
+      addRect(48, 0, 18, 5, 0xded08f, 0.92, 0, 13);
+      addRect(4, -23, 17, 8, 0x171a13, 1, 0, 12);
+      addRect(4, 23, 17, 8, 0x171a13, 1, 0, 12);
+      addRect(-28, -23, 17, 8, 0x171a13, 1, 0, 12);
+      addRect(-28, 23, 17, 8, 0x171a13, 1, 0, 12);
+      addRect(24, -15, 16, 3, 0xe7dd9c, 0.42, -0.18, 13);
+      addRect(24, 15, 16, 3, 0xe7dd9c, 0.42, 0.18, 13);
+      return parts;
+    }
+
+    addRect(0, -25, 88, 12, 0x171a16, 1, 0, 10);
+    addRect(0, 25, 88, 12, 0x171a16, 1, 0, 10);
+    for (let tread = -32; tread <= 32; tread += 16) {
+      addRect(tread, -25, 8, 12, 0x4b4f46, 0.92, 0, 11);
+      addRect(tread, 25, 8, 12, 0x4b4f46, 0.92, 0, 11);
+    }
+    addRect(-5, 0, 74, 42, baseTint, 1, 0, 12);
+    addRect(-18, 0, 28, 32, 0x69737c, 0.96, 0, 13);
+    addCircle(12, 0, 17, 0x424a4f, 1, 14);
+    addRect(42, 0, 52, 8, 0x343a3d, 1, 0, 15);
+    addRect(68, 0, 13, 12, 0x252b2e, 1, 0, 15);
+    addRect(-34, -12, 15, 7, 0xb5b891, 0.38, -0.15, 14);
+    addRect(-34, 12, 15, 7, 0xb5b891, 0.32, 0.15, 14);
+    addCircle(-5, 0, 7, 0x9ba2a2, 0.68, 15);
+    return parts;
+  }
+
+  private createEnemyMountVisualParts(enemy: EnemyUnit): VehicleVisualPart[] {
+    const mount = this.getEnemyMountKind(enemy.kind);
+    if (!mount) {
+      return [];
+    }
+
+    const parts: VehicleVisualPart[] = [];
+    const baseTint = mount === 'tank' ? 0x715b42 : mount === 'jeep' ? 0x6b4d30 : 0x8a3d2d;
+    const brokenTint = 0x241d18;
+    const addRect = (offsetX: number, offsetY: number, width: number, height: number, tint: number, alpha = 1, rotationOffset = 0, depth = 10): void => {
+      const rect = this.add.rectangle(enemy.sprite.x, enemy.sprite.y, width, height, tint, alpha);
+      rect.setDepth(depth);
+      rect.setStrokeStyle(1, 0xffdba5, 0.18);
+      parts.push({ object: rect, offsetX, offsetY, rotationOffset, baseTint: tint, brokenTint, alpha });
+    };
+    const addCircle = (offsetX: number, offsetY: number, radius: number, tint: number, alpha = 1, depth = 10): void => {
+      const circle = this.add.circle(enemy.sprite.x, enemy.sprite.y, radius, tint, alpha);
+      circle.setDepth(depth);
+      circle.setStrokeStyle(2, 0x11140f, 0.48);
+      parts.push({ object: circle, offsetX, offsetY, rotationOffset: 0, baseTint: tint, brokenTint, alpha });
+    };
+
+    if (mount === 'motorcycle') {
+      addCircle(-20, 3, 8, 0x171513, 1, 9);
+      addCircle(21, 3, 8, 0x171513, 1, 9);
+      addRect(0, 2, 38, 6, 0x2a221c, 0.96, 0, 10);
+      addRect(-3, -4, 19, 8, baseTint, 1, -0.1, 11);
+      addRect(12, 3, 15, 5, 0xc79a66, 0.78, 0.16, 11);
+      addRect(25, -5, 13, 4, 0x302b24, 0.92, 0.26, 11);
+      addRect(27, 1, 8, 3, 0xffd38a, 0.72, 0, 11);
+    } else if (mount === 'jeep') {
+      addRect(0, 0, 68, 35, 0x2c251c, 0.98, 0, 9);
+      addRect(8, 0, 39, 27, baseTint, 1, 0, 10);
+      addRect(-15, -2, 22, 21, 0x241c16, 0.94, 0, 11);
+      addRect(-15, -8, 15, 7, 0x774d33, 0.72, 0, 12);
+      addRect(37, 0, 16, 5, 0xffbd74, 0.82, 0, 12);
+      addRect(6, -21, 16, 8, 0x15130f, 1, 0, 10);
+      addRect(6, 21, 16, 8, 0x15130f, 1, 0, 10);
+      addRect(-25, -21, 16, 8, 0x15130f, 1, 0, 10);
+      addRect(-25, 21, 16, 8, 0x15130f, 1, 0, 10);
+    } else {
+      addRect(0, -23, 84, 11, 0x171513, 1, 0, 9);
+      addRect(0, 23, 84, 11, 0x171513, 1, 0, 9);
+      for (let tread = -30; tread <= 30; tread += 15) {
+        addRect(tread, -23, 7, 11, 0x4c4338, 0.92, 0, 10);
+        addRect(tread, 23, 7, 11, 0x4c4338, 0.92, 0, 10);
+      }
+      addRect(-4, 0, 70, 38, baseTint, 1, 0, 11);
+      addCircle(10, 0, 15, 0x4a3d32, 1, 12);
+      addRect(39, 0, 48, 7, 0x302a23, 1, 0, 13);
+      addRect(65, 0, 12, 10, 0x211d19, 1, 0, 13);
+    }
+
+    this.syncVisualParts(enemy.sprite.x, enemy.sprite.y, enemy.sprite.rotation, parts);
+    return parts;
+  }
+
+  private getEnemyMountKind(kind: EnemyKind): VehicleKind | undefined {
+    if (kind === 'bikeRaider') {
+      return 'motorcycle';
+    }
+    if (kind === 'jeepRaider') {
+      return 'jeep';
+    }
+    if (kind === 'tankRaider') {
+      return 'tank';
+    }
+    return undefined;
+  }
+
+  private isMountedEnemy(kind: EnemyKind): boolean {
+    return this.getEnemyMountKind(kind) !== undefined;
   }
 
   private getStageNumber(stage: StageConfig): number {
@@ -1809,6 +2008,7 @@ export class BattleScene extends Phaser.Scene {
         continue;
       }
 
+      this.syncVehicleVisuals(vehicle);
       vehicle.label.setPosition(vehicle.body.x, vehicle.body.y - 4);
       vehicle.label.setRotation(vehicle.body.rotation);
       vehicle.hpLabel.setPosition(vehicle.body.x, vehicle.body.y + vehicle.body.height * 0.5 + 10);
@@ -1819,6 +2019,50 @@ export class BattleScene extends Phaser.Scene {
 
       if (!vehicle.driver) {
         (vehicle.body.body as Phaser.Physics.Arcade.Body).setVelocity(0, 0);
+      }
+    }
+  }
+
+  private syncVehicleVisuals(vehicle: VehicleUnit): void {
+    this.syncVisualParts(vehicle.body.x, vehicle.body.y, vehicle.body.rotation, vehicle.visualParts);
+  }
+
+  private syncEnemyVisuals(enemy: EnemyUnit): void {
+    if (!enemy.visualParts) {
+      return;
+    }
+    this.syncVisualParts(enemy.sprite.x, enemy.sprite.y, enemy.sprite.rotation, enemy.visualParts);
+  }
+
+  private syncVisualParts(x: number, y: number, angle: number, parts: VehicleVisualPart[]): void {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    for (const part of parts) {
+      const partX = x + part.offsetX * cos - part.offsetY * sin;
+      const partY = y + part.offsetX * sin + part.offsetY * cos;
+      part.object.setPosition(partX, partY);
+      part.object.setRotation(angle + part.rotationOffset);
+    }
+  }
+
+  private setVehicleVisualTint(vehicle: VehicleUnit, mode: 'base' | 'hit' | 'broken'): void {
+    this.setVisualPartsTint(vehicle.visualParts, mode);
+  }
+
+  private setEnemyVisualTint(enemy: EnemyUnit, mode: 'base' | 'hit' | 'broken'): void {
+    if (enemy.visualParts) {
+      this.setVisualPartsTint(enemy.visualParts, mode);
+    }
+  }
+
+  private setVisualPartsTint(parts: VehicleVisualPart[], mode: 'base' | 'hit' | 'broken'): void {
+    for (const part of parts) {
+      if (mode === 'hit') {
+        part.object.setFillStyle(0xf0d36b, Math.min(1, part.alpha + 0.08));
+      } else if (mode === 'broken') {
+        part.object.setFillStyle(part.brokenTint, Math.max(0.34, part.alpha * 0.76));
+      } else {
+        part.object.setFillStyle(part.baseTint, part.alpha);
       }
     }
   }
@@ -1949,10 +2193,12 @@ export class BattleScene extends Phaser.Scene {
       const distance = direction.length();
       direction.normalize();
       enemy.sprite.setRotation(direction.angle());
+      this.syncEnemyVisuals(enemy);
       const hasSight = this.hasLineOfSight(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y);
 
       if (!hasSight) {
         enemy.sprite.setVelocity(0, 0);
+        this.syncEnemyVisuals(enemy);
         this.playLoop(enemy.sprite, animationKey(getEnemyTextureKey(enemy.theme, enemy.kind, 'stand')));
         continue;
       }
@@ -1978,6 +2224,18 @@ export class BattleScene extends Phaser.Scene {
         }
       } else if (enemy.kind === 'turret') {
         enemy.sprite.setVelocity(0, 0);
+      } else if (this.isMountedEnemy(enemy.kind)) {
+        const desiredRange = enemy.kind === 'tankRaider' ? 420 : enemy.kind === 'jeepRaider' ? 320 : 245;
+        const advance = distance > desiredRange ? 0.78 : distance < desiredRange * 0.58 ? -0.32 : 0;
+        const strafe = Math.sin(time / (enemy.kind === 'bikeRaider' ? 340 : 520) + enemy.behaviorOffset) * (enemy.kind === 'tankRaider' ? 0.16 : 0.36);
+        const side = new Phaser.Math.Vector2(-direction.y, direction.x).scale(strafe);
+        const move = direction.clone().scale(advance).add(side);
+        if (move.lengthSq() > 0) {
+          move.normalize();
+          enemy.sprite.setVelocity(move.x * enemy.moveSpeed, move.y * enemy.moveSpeed);
+        } else {
+          enemy.sprite.setVelocity(0, 0);
+        }
       } else {
         const desiredRange = enemy.kind === 'rocketeer' ? 280 : 190;
         const advance = distance > desiredRange ? 0.72 : distance < desiredRange * 0.45 ? -0.25 : 0;
@@ -1992,19 +2250,21 @@ export class BattleScene extends Phaser.Scene {
         }
       }
 
-      const fireRange = enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'scout' ? 430 : 360;
+      this.syncEnemyVisuals(enemy);
+
+      const fireRange = enemy.kind === 'tankRaider' ? 560 : enemy.kind === 'jeepRaider' ? 430 : enemy.kind === 'bikeRaider' ? 330 : enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'scout' ? 430 : 360;
       if (enemy.kind !== 'zombie' && distance <= fireRange && time >= enemy.nextFireAt) {
         if (enemy.kind === 'scout') {
           this.fireEnemyPoisonDart(enemy, direction);
         } else {
-          const spread = enemy.kind === 'rocketeer' ? 0.12 : 0.05;
+          const spread = enemy.kind === 'tankRaider' ? 0.09 : enemy.kind === 'jeepRaider' ? 0.08 : enemy.kind === 'bikeRaider' ? 0.1 : enemy.kind === 'rocketeer' ? 0.12 : 0.05;
           this.fireEnemyBullet(
             enemy.sprite.x + direction.x * 14,
             enemy.sprite.y + direction.y * 14,
             direction.clone().rotate(Phaser.Math.FloatBetween(-spread, spread)),
             enemy.bulletSpeed,
             enemy.damage,
-            enemy.kind === 'rocketeer' ? 0xff9359 : 0xff5b4a,
+            enemy.kind === 'tankRaider' ? 0xffb35c : enemy.kind === 'jeepRaider' ? 0xffd08a : enemy.kind === 'bikeRaider' ? 0xff8a5c : enemy.kind === 'rocketeer' ? 0xff9359 : 0xff5b4a,
           );
         }
         enemy.nextFireAt = time + enemy.fireRate;
@@ -2103,8 +2363,8 @@ export class BattleScene extends Phaser.Scene {
         continue;
       }
 
-      const range = enemy.kind === 'zombie' ? 210 : enemy.kind === 'scout' ? 430 : enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'turret' ? 420 : 360;
-      const halfAngle = enemy.kind === 'zombie' ? 0.62 : enemy.kind === 'scout' ? 0.52 : enemy.kind === 'turret' ? 0.3 : 0.42;
+      const range = enemy.kind === 'zombie' ? 210 : enemy.kind === 'tankRaider' ? 560 : enemy.kind === 'jeepRaider' ? 430 : enemy.kind === 'bikeRaider' ? 330 : enemy.kind === 'scout' ? 430 : enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'turret' ? 420 : 360;
+      const halfAngle = enemy.kind === 'zombie' ? 0.62 : enemy.kind === 'tankRaider' ? 0.34 : enemy.kind === 'jeepRaider' ? 0.4 : enemy.kind === 'bikeRaider' ? 0.46 : enemy.kind === 'scout' ? 0.52 : enemy.kind === 'turret' ? 0.3 : 0.42;
       const angle = enemy.sprite.rotation;
       const leftX = enemy.sprite.x + Math.cos(angle - halfAngle) * range;
       const leftY = enemy.sprite.y + Math.sin(angle - halfAngle) * range;
@@ -2360,27 +2620,36 @@ export class BattleScene extends Phaser.Scene {
     } else if (kind === 'scout') {
       sprite.setScale(0.72);
       sprite.setTint(0x93ffcb);
+    } else if (this.isMountedEnemy(kind)) {
+      sprite.setScale(kind === 'tankRaider' ? 0.64 : 0.7);
+      sprite.setTint(kind === 'tankRaider' ? 0xffc17d : kind === 'jeepRaider' ? 0xff9f5c : 0xff795c);
+      sprite.setDepth(14);
     }
-    this.configureBody(sprite, kind === 'turret' ? 20 : kind === 'zombie' || kind === 'scout' ? 13 : 16, 14);
+    this.configureBody(
+      sprite,
+      kind === 'tankRaider' ? 76 : kind === 'jeepRaider' ? 58 : kind === 'bikeRaider' ? 42 : kind === 'turret' ? 20 : kind === 'zombie' || kind === 'scout' ? 13 : 16,
+      kind === 'tankRaider' ? 42 : kind === 'jeepRaider' ? 32 : kind === 'bikeRaider' ? 24 : 14,
+    );
 
     const enemy: EnemyUnit = {
       id,
       kind,
       theme,
       sprite,
-      health: kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
-      maxHealth: kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
+      health: kind === 'tankRaider' ? 330 : kind === 'jeepRaider' ? 160 : kind === 'bikeRaider' ? 70 : kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
+      maxHealth: kind === 'tankRaider' ? 330 : kind === 'jeepRaider' ? 160 : kind === 'bikeRaider' ? 70 : kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
       alive: true,
-      moveSpeed: kind === 'scout' ? 96 : kind === 'zombie' ? 96 : kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
-      fireRate: kind === 'scout' ? 1520 : kind === 'rocketeer' ? 1400 : kind === 'turret' ? 1050 : 900,
-      bulletSpeed: kind === 'scout' ? 280 : kind === 'rocketeer' ? 265 : kind === 'turret' ? 340 : 300,
-      damage: kind === 'scout' ? 14 : kind === 'zombie' ? 8 : kind === 'rocketeer' ? 18 : kind === 'turret' ? 12 : 10,
+      moveSpeed: kind === 'bikeRaider' ? 128 : kind === 'jeepRaider' ? 94 : kind === 'tankRaider' ? 54 : kind === 'scout' ? 96 : kind === 'zombie' ? 96 : kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
+      fireRate: kind === 'tankRaider' ? 1420 : kind === 'jeepRaider' ? 980 : kind === 'bikeRaider' ? 1180 : kind === 'scout' ? 1520 : kind === 'rocketeer' ? 1400 : kind === 'turret' ? 1050 : 900,
+      bulletSpeed: kind === 'tankRaider' ? 300 : kind === 'jeepRaider' ? 340 : kind === 'bikeRaider' ? 310 : kind === 'scout' ? 280 : kind === 'rocketeer' ? 265 : kind === 'turret' ? 340 : 300,
+      damage: kind === 'tankRaider' ? 22 : kind === 'jeepRaider' ? 14 : kind === 'bikeRaider' ? 10 : kind === 'scout' ? 14 : kind === 'zombie' ? 8 : kind === 'rocketeer' ? 18 : kind === 'turret' ? 12 : 10,
       nextFireAt: this.time.now + Phaser.Math.Between(250, 850),
       fireVisualUntil: 0,
       contactReadyAt: 0,
       encounterId,
       behaviorOffset: Phaser.Math.FloatBetween(0, Math.PI * 2),
     };
+    enemy.visualParts = this.createEnemyMountVisualParts(enemy);
 
     sprite.setData('actorKind', 'enemy');
     sprite.setData('actor', enemy);
@@ -2599,24 +2868,25 @@ export class BattleScene extends Phaser.Scene {
     targetRadius: number,
   ): number {
     const effectiveDistance = Math.max(0, distance - targetRadius);
-    const closeLimit = weapon.kind === 'sniper' ? 260 : 240;
-    const mediumLimit = weapon.kind === 'sniper' ? 720 : 560;
+    const closeLimit = weapon.kind === 'sniper' ? 280 : 250;
+    const mediumLimit = weapon.kind === 'sniper' ? 760 : 620;
 
     if (weapon.kind === 'sniper') {
       if (effectiveDistance <= closeLimit) {
-        return Phaser.Math.DegToRad(15);
+        return Phaser.Math.DegToRad(38);
       }
       if (effectiveDistance <= mediumLimit) {
-        return Phaser.Math.DegToRad(10);
+        return Phaser.Math.DegToRad(22);
       }
-      return Phaser.Math.DegToRad(6);
+      return Phaser.Math.DegToRad(12);
     }
 
+    // Single-shot weapons still need aim forgiveness for stepped input, but less than the sniper.
     if (effectiveDistance <= closeLimit) {
-      return Phaser.Math.DegToRad(34);
+      return Phaser.Math.DegToRad(30);
     }
     if (effectiveDistance <= mediumLimit) {
-      return Phaser.Math.DegToRad(18);
+      return Phaser.Math.DegToRad(16);
     }
     return Phaser.Math.DegToRad(8);
   }
@@ -3339,9 +3609,11 @@ export class BattleScene extends Phaser.Scene {
 
     vehicle.hp -= amount;
     vehicle.body.setFillStyle(0xf0d36b, 0.96);
+    this.setVehicleVisualTint(vehicle, 'hit');
     this.time.delayedCall(75, () => {
       if (vehicle.active) {
-        vehicle.body.setFillStyle(vehicle.baseTint, 0.96);
+        vehicle.body.setFillStyle(vehicle.baseTint, 0.2);
+        this.setVehicleVisualTint(vehicle, 'base');
       }
     });
 
@@ -3357,6 +3629,7 @@ export class BattleScene extends Phaser.Scene {
     vehicle.driver = undefined;
     (vehicle.body.body as Phaser.Physics.Arcade.Body).enable = false;
     vehicle.body.setFillStyle(vehicle.brokenTint, 0.74);
+    this.setVehicleVisualTint(vehicle, 'broken');
     vehicle.label.setText('BROKEN');
     vehicle.hpLabel.setText('0');
     this.createExplosion(vehicle.body.x, vehicle.body.y, vehicle.kind === 'tank' ? 95 : vehicle.kind === 'jeep' ? 70 : 48, vehicle.kind === 'tank' ? 55 : vehicle.kind === 'jeep' ? 35 : 20, 0xff8a4a);
@@ -3401,6 +3674,12 @@ export class BattleScene extends Phaser.Scene {
   private damageEnemy(enemy: EnemyUnit, amount: number): void {
     enemy.health -= amount;
     this.flashSprite(enemy.sprite);
+    this.setEnemyVisualTint(enemy, 'hit');
+    this.time.delayedCall(75, () => {
+      if (enemy.alive) {
+        this.setEnemyVisualTint(enemy, 'base');
+      }
+    });
 
     if (enemy.health > 0) {
       return;
@@ -3410,6 +3689,17 @@ export class BattleScene extends Phaser.Scene {
     enemy.sprite.disableBody(false, false);
     enemy.sprite.setVelocity(0, 0);
     enemy.sprite.setDepth(9);
+    this.setEnemyVisualTint(enemy, 'broken');
+    enemy.visualParts?.forEach((part) => {
+      this.tweens.killTweensOf(part.object);
+      this.tweens.add({
+        targets: part.object,
+        alpha: 0,
+        duration: 440,
+        ease: 'Quad.easeOut',
+        onComplete: () => part.object.destroy(),
+      });
+    });
     this.tweens.killTweensOf(enemy.sprite);
     this.tweens.add({
       targets: enemy.sprite,
@@ -3420,7 +3710,7 @@ export class BattleScene extends Phaser.Scene {
       ease: 'Quad.easeOut',
       onComplete: () => enemy.sprite.destroy(),
     });
-    this.director.addScore(enemy.kind === 'zombie' ? 45 : enemy.kind === 'turret' ? 180 : enemy.kind === 'rocketeer' ? 140 : 100);
+    this.director.addScore(enemy.kind === 'tankRaider' ? 360 : enemy.kind === 'jeepRaider' ? 240 : enemy.kind === 'bikeRaider' ? 150 : enemy.kind === 'zombie' ? 45 : enemy.kind === 'turret' ? 180 : enemy.kind === 'rocketeer' ? 140 : 100);
 
     const encounter = this.encounterStates.find((state) => state.config.id === enemy.encounterId);
     if (encounter) {

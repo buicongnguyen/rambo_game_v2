@@ -618,6 +618,7 @@ export const STAGES: StageConfig[] = [
           { id: 'rd1-z2', kind: 'zombie', x: 850, y: 360 },
           { id: 'rd1-h1', kind: 'rocketeer', x: 930, y: 300 },
           { id: 'rd1-s1', kind: 'scout', x: 1010, y: 430 },
+          { id: 'rd1-bike1', kind: 'bikeRaider', x: 1060, y: 610 },
         ],
       },
       {
@@ -632,6 +633,7 @@ export const STAGES: StageConfig[] = [
           { id: 'rd2-h1', kind: 'rocketeer', x: 1680, y: 360 },
           { id: 'rd2-t1', kind: 'turret', x: 1780, y: 700 },
           { id: 'rd2-s1', kind: 'scout', x: 1840, y: 470 },
+          { id: 'rd2-bike1', kind: 'bikeRaider', x: 1900, y: 620 },
         ],
       },
       {
@@ -646,6 +648,7 @@ export const STAGES: StageConfig[] = [
           { id: 'rd3-h1', kind: 'rocketeer', x: 2480, y: 360 },
           { id: 'rd3-t1', kind: 'turret', x: 2580, y: 280 },
           { id: 'rd3-t2', kind: 'turret', x: 2630, y: 720 },
+          { id: 'rd3-bike1', kind: 'bikeRaider', x: 2680, y: 520 },
         ],
       },
     ],
@@ -703,6 +706,7 @@ export const STAGES: StageConfig[] = [
           { id: 'dm1-z1', kind: 'zombie', x: 930, y: 560 },
           { id: 'dm1-t1', kind: 'turret', x: 1010, y: 260 },
           { id: 'dm1-s1', kind: 'scout', x: 1080, y: 460 },
+          { id: 'dm1-jeep1', kind: 'jeepRaider', x: 1120, y: 650 },
         ],
       },
       {
@@ -717,6 +721,7 @@ export const STAGES: StageConfig[] = [
           { id: 'dm2-z2', kind: 'zombie', x: 1760, y: 640 },
           { id: 'dm2-t1', kind: 'turret', x: 1860, y: 310 },
           { id: 'dm2-s1', kind: 'scout', x: 1940, y: 510 },
+          { id: 'dm2-jeep1', kind: 'jeepRaider', x: 1990, y: 680 },
         ],
       },
       {
@@ -731,6 +736,7 @@ export const STAGES: StageConfig[] = [
           { id: 'dm3-z1', kind: 'zombie', x: 2560, y: 540 },
           { id: 'dm3-t1', kind: 'turret', x: 2660, y: 300 },
           { id: 'dm3-t2', kind: 'turret', x: 2700, y: 730 },
+          { id: 'dm3-jeep1', kind: 'jeepRaider', x: 2760, y: 520 },
         ],
       },
     ],
@@ -787,6 +793,7 @@ export const STAGES: StageConfig[] = [
           { id: 'bf1-z4', kind: 'zombie', x: 830, y: 540 },
           { id: 'bf1-r1', kind: 'rifleman', x: 930, y: 690 },
           { id: 'bf1-s1', kind: 'scout', x: 1020, y: 430 },
+          { id: 'bf1-tank1', kind: 'tankRaider', x: 1080, y: 620 },
         ],
       },
       {
@@ -801,6 +808,7 @@ export const STAGES: StageConfig[] = [
           { id: 'bf2-h1', kind: 'rocketeer', x: 1740, y: 330 },
           { id: 'bf2-t1', kind: 'turret', x: 1840, y: 680 },
           { id: 'bf2-s1', kind: 'scout', x: 1910, y: 500 },
+          { id: 'bf2-tank1', kind: 'tankRaider', x: 1980, y: 320 },
         ],
       },
       {
@@ -815,6 +823,7 @@ export const STAGES: StageConfig[] = [
           { id: 'bf3-z5', kind: 'zombie', x: 2600, y: 500 },
           { id: 'bf3-h1', kind: 'rocketeer', x: 2700, y: 320 },
           { id: 'bf3-t1', kind: 'turret', x: 2780, y: 700 },
+          { id: 'bf3-tank1', kind: 'tankRaider', x: 2820, y: 500 },
         ],
       },
     ],
