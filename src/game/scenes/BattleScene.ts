@@ -1869,9 +1869,14 @@ export class BattleScene extends Phaser.Scene {
     this.physics.add.overlap(this.enemyBullets!, this.playerGroup!, (bullet, player) => {
       this.handlePlayerHit(bullet as Phaser.GameObjects.GameObject, player as Phaser.GameObjects.GameObject);
     });
-    this.physics.add.overlap(this.enemyBullets!, this.vehicleGroup!, (bullet, vehicle) => {
-      this.handleVehicleHit(bullet as Phaser.GameObjects.GameObject, vehicle as Phaser.GameObjects.GameObject);
-    });
+    this.physics.add.overlap(
+      this.enemyBullets!,
+      this.vehicleGroup!,
+      (bullet, vehicle) => {
+        this.handleVehicleHit(bullet as Phaser.GameObjects.GameObject, vehicle as Phaser.GameObjects.GameObject);
+      },
+      (_bullet, vehicle) => this.isVehicleOccupied(vehicle as Phaser.GameObjects.GameObject),
+    );
     this.physics.add.overlap(this.playerGroup!, this.enemyGroup!, (player, enemy) => {
       this.handleEnemyContact(player as Phaser.GameObjects.GameObject, enemy as Phaser.GameObjects.GameObject);
     });
@@ -4262,6 +4267,11 @@ export class BattleScene extends Phaser.Scene {
 
     this.damageVehicle(vehicle, 1);
     this.dropBullet(bullet);
+  }
+
+  private isVehicleOccupied(vehicleObject: Phaser.GameObjects.GameObject): boolean {
+    const vehicle = vehicleObject.getData('vehicle') as VehicleUnit | undefined;
+    return Boolean(vehicle?.active && vehicle.driver);
   }
 
   private handleVehicleEnemyContact(vehicleObject: Phaser.GameObjects.GameObject, enemyObject: Phaser.GameObjects.GameObject): void {

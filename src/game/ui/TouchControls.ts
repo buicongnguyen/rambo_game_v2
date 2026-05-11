@@ -90,9 +90,10 @@ export class TouchControlsOverlay {
   }
 
   private readonly syncVisibility = (): void => {
-    const available = this.touchQuery.matches || window.navigator.maxTouchPoints > 0 || window.innerWidth <= 1100;
-    document.body.dataset.touchMode = available ? 'true' : 'false';
-    this.root.dataset.active = available ? 'true' : 'false';
+    const touchLayout = this.touchQuery.matches || window.navigator.maxTouchPoints > 0 || window.innerWidth <= 1100;
+    document.body.dataset.touchMode = touchLayout ? 'true' : 'false';
+    this.root.dataset.active = 'true';
+    this.root.dataset.mode = touchLayout ? 'touch' : 'desktop';
     this.applyVisibility();
   };
 

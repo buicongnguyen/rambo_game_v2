@@ -164,6 +164,42 @@ a {
   pointer-events: none;
 }
 
+.touch-controls-root[data-mode='desktop'] .touch-cluster-left {
+  display: none;
+}
+
+.touch-controls-root[data-mode='desktop'] .touch-cluster-right {
+  right: 22px;
+  bottom: 22px;
+}
+
+.touch-controls-root[data-mode='desktop'] .touch-action-grid {
+  grid-template-columns: repeat(2, minmax(0, 62px));
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(255, 242, 196, 0.14);
+  border-radius: 22px;
+  background: rgba(6, 12, 8, 0.34);
+  backdrop-filter: blur(8px);
+}
+
+.touch-controls-root[data-mode='desktop'] .touch-button {
+  min-width: 62px;
+  min-height: 52px;
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.touch-controls-root[data-mode='desktop'] .touch-button-fire {
+  min-width: 70px;
+  min-height: 62px;
+  border-radius: 18px;
+}
+
+.touch-controls-root[data-mode='desktop'] .touch-button strong {
+  font-size: 0.62rem;
+}
+
 .touch-controls {
   position: absolute;
   inset: 0;
