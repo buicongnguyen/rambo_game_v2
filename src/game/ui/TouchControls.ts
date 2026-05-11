@@ -29,7 +29,7 @@ export class TouchControlsOverlay {
           <div class="touch-stick-shell" data-stick-zone data-engaged="false">
             <div class="touch-stick-ring"></div>
             <div class="touch-stick-knob" data-stick-knob></div>
-            <span class="touch-stick-keys">WASD</span>
+            <span class="touch-stick-keys">W A S D</span>
             <span class="touch-stick-label">Move</span>
           </div>
         </div>
@@ -37,19 +37,19 @@ export class TouchControlsOverlay {
           <div class="touch-action-grid">
             <button type="button" class="touch-button" data-action="jump">
               <strong>Jump Roll</strong>
-              <span class="key-hint">I</span>
+              <span class="key-hint">Key U</span>
             </button>
             <button type="button" class="touch-button touch-button-fire" data-action="fire">
               <strong>Fire</strong>
-              <span class="key-hint">U</span>
+              <span class="key-hint">Key I</span>
             </button>
             <button type="button" class="touch-button" data-action="crouch">
               <strong>Gun</strong>
-              <span class="key-hint">J</span>
+              <span class="key-hint">Key J</span>
             </button>
             <button type="button" class="touch-button touch-button-special" data-action="special">
               <strong>Bomb</strong>
-              <span class="key-hint">K</span>
+              <span class="key-hint">Key K</span>
               <span class="action-detail" data-special-detail></span>
             </button>
           </div>
