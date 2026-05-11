@@ -14,6 +14,7 @@ export class TouchControlsOverlay {
   private readonly stickZone: HTMLElement;
   private readonly stickKnob: HTMLElement;
   private readonly specialButton: HTMLButtonElement | null;
+  private readonly specialDetail: HTMLElement | null;
   private readonly buttonResetters: Array<() => void> = [];
   private readonly touchQuery = window.matchMedia('(hover: none), (pointer: coarse)');
   private stickPointerId: number | null = null;
@@ -28,6 +29,7 @@ export class TouchControlsOverlay {
           <div class="touch-stick-shell" data-stick-zone data-engaged="false">
             <div class="touch-stick-ring"></div>
             <div class="touch-stick-knob" data-stick-knob></div>
+            <span class="touch-stick-keys">WASD</span>
             <span class="touch-stick-label">Move</span>
           </div>
         </div>
@@ -35,15 +37,20 @@ export class TouchControlsOverlay {
           <div class="touch-action-grid">
             <button type="button" class="touch-button" data-action="jump">
               <strong>Jump Roll</strong>
+              <span class="key-hint">I</span>
             </button>
             <button type="button" class="touch-button touch-button-fire" data-action="fire">
               <strong>Fire</strong>
+              <span class="key-hint">U</span>
             </button>
             <button type="button" class="touch-button" data-action="crouch">
               <strong>Gun</strong>
+              <span class="key-hint">J</span>
             </button>
             <button type="button" class="touch-button touch-button-special" data-action="special">
               <strong>Bomb</strong>
+              <span class="key-hint">K</span>
+              <span class="action-detail" data-special-detail></span>
             </button>
           </div>
         </div>
@@ -60,6 +67,7 @@ export class TouchControlsOverlay {
     this.stickZone = stickZone;
     this.stickKnob = stickKnob;
     this.specialButton = this.root.querySelector<HTMLButtonElement>('button[data-action="special"]');
+    this.specialDetail = this.root.querySelector<HTMLElement>('[data-special-detail]');
 
     this.bindStick();
     this.bindButtons();
@@ -74,18 +82,14 @@ export class TouchControlsOverlay {
 
   setHud(snapshot: HudSnapshot): void {
     const player = snapshot.players[0];
-    if (!this.specialButton || !player) {
+    if (!this.specialButton || !this.specialDetail || !player) {
       return;
     }
 
     const cooldownSeconds = Math.ceil((player.bombCooldownMs ?? 0) / 1000);
-    const detail = cooldownSeconds > 0
+    this.specialDetail.textContent = cooldownSeconds > 0
       ? `CD ${cooldownSeconds}`
       : `x${player.bombs}`;
-    this.specialButton.innerHTML = `
-      <strong>Bomb</strong>
-      <span>${detail}</span>
-    `;
     this.specialButton.dataset.cooldown = cooldownSeconds > 0 ? 'true' : 'false';
   }
 
