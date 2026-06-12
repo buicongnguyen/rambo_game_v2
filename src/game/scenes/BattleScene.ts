@@ -1,7 +1,15 @@
 import Phaser from 'phaser';
+import {
+  clipSegmentToRects,
+  expDecayLerp,
+  minimumZoomToCoverWorld,
+  terrainSpeedMultiplier,
+  vehicleExitDistance,
+} from '../core/combatMath';
 import { CONTROL_SCHEMES } from '../core/ControlScheme';
 import { GameDirector } from '../core/GameDirector';
 import { VirtualGamepad, type GameAction } from '../core/VirtualGamepad';
+import { ENEMY_STATS } from '../data/enemyStats';
 import {
   ALL_SPRITE_SHEETS,
   animationKey,
@@ -48,6 +56,24 @@ interface WeaponSpec {
 }
 
 type BulletZoneEffect = 'drag' | 'boost' | 'crosswind';
+
+interface ProjectileOptions {
+  direction: Phaser.Math.Vector2;
+  speed: number;
+  damage: number;
+  tint: number;
+  maxDistance: number;
+  scaleX: number;
+  scaleY: number;
+  splashRadius?: number;
+  splashDamage?: number;
+  poisonRadius?: number;
+  poisonDamage?: number;
+  pierceCount?: number;
+  dropStartRatio?: number;
+  tracerDistance?: number;
+  projectileTexture?: string;
+}
 
 interface BulletEffectZone {
   bounds: Phaser.Geom.Rectangle;
@@ -327,7 +353,6 @@ interface PlayerUnit {
   alive: boolean;
   moveSpeed: number;
   walkSpeed: number;
-  crawlSpeed: number;
   jumpSpeed: number;
   fireRate: number;
   bulletSpeed: number;
@@ -336,16 +361,18 @@ interface PlayerUnit {
   nextSpecialAt: number;
   jumpReadyAt: number;
   jumpUntil: number;
+  jumpDurationMs: number;
   fireVisualUntil: number;
   contactReadyAt: number;
+  vehicleEntryReadyAt: number;
   aimAssistShots: number;
-  rifleAimAssistEvery: number;
   weaponIndex: number;
   weapons: WeaponKind[];
   ammo: Record<WeaponKind, number>;
   vehicle?: VehicleUnit;
   aim: Phaser.Math.Vector2;
   jumpVector: Phaser.Math.Vector2;
+  shadow: Phaser.GameObjects.Ellipse;
   virtualControlId?: 1 | 2;
   controls: {
     up: Phaser.Input.Keyboard.Key;
@@ -458,6 +485,7 @@ export class BattleScene extends Phaser.Scene {
   private rescueBunkerGroup?: Phaser.Physics.Arcade.StaticGroup;
   private vehicleGroup?: Phaser.Physics.Arcade.Group;
   private vehicles: VehicleUnit[] = [];
+  private obstacleGroup?: Phaser.Physics.Arcade.StaticGroup;
   private obstacleBodies: Phaser.GameObjects.Rectangle[] = [];
   private bulletTravelBounds = new Phaser.Geom.Rectangle();
   private sightLine = new Phaser.Geom.Line();
@@ -525,11 +553,11 @@ export class BattleScene extends Phaser.Scene {
     this.updateEnemies(time);
     this.drawEnemyVisionCones(time);
     this.updateBoss(time);
-    this.updateCameraAnchor();
+    this.updateCameraAnchor(delta);
     this.keepActorsInsideVisiblePlayfield();
     this.checkEncounterTriggers();
-    this.updateBullets(this.playerBullets, time, delta);
-    this.updateBullets(this.enemyBullets, time, delta);
+    this.updateBullets(this.playerBullets, time);
+    this.updateBullets(this.enemyBullets, time);
 
     if (time - this.hudTimestamp > 120) {
       this.hudTimestamp = time;
@@ -670,12 +698,10 @@ export class BattleScene extends Phaser.Scene {
     this.nextVisionConeDrawAt = 0;
     this.spawnDoors.clear();
 
-    this.children.removeAll();
     this.bannerText = undefined;
     this.reticleText = undefined;
     this.objectivePanel = undefined;
     this.visionGraphics = undefined;
-    this.physics.world.colliders.destroy();
     this.physics.resume();
     this.physics.world.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
     this.cameras.main.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
@@ -695,6 +721,7 @@ export class BattleScene extends Phaser.Scene {
     this.supplyCrates = this.physics.add.staticGroup();
     this.rescueBunkerGroup = this.physics.add.staticGroup();
     this.vehicleGroup = this.physics.add.group();
+    this.obstacleGroup = this.physics.add.staticGroup();
     this.obstacleBodies = [];
     this.bulletTravelBounds.setTo(-80, -80, this.stage.worldWidth + 160, this.stage.worldHeight + 160);
     this.bulletZones = [];
@@ -1726,10 +1753,6 @@ export class BattleScene extends Phaser.Scene {
     return undefined;
   }
 
-  private isMountedEnemy(kind: EnemyKind): boolean {
-    return this.getEnemyMountKind(kind) !== undefined;
-  }
-
   private getStageNumber(stage: StageConfig): number {
     const match = stage.name.match(/\d+/);
     return match ? Number(match[0]) : 1;
@@ -1772,6 +1795,10 @@ export class BattleScene extends Phaser.Scene {
       sprite.play(animationKey('player-idle'));
       this.configureBody(sprite, 20, 16);
 
+      const shadow = this.add.ellipse(sprite.x, sprite.y + 14, 34, 13, 0x000000, 0.28);
+      shadow.setDepth(11);
+      shadow.setVisible(false);
+
       const player: PlayerUnit = {
         id: playerId,
         label: scheme.callsign,
@@ -1784,7 +1811,6 @@ export class BattleScene extends Phaser.Scene {
         alive: true,
         moveSpeed: 220,
         walkSpeed: 150,
-        crawlSpeed: 92,
         jumpSpeed: 320,
         fireRate: 170,
         bulletSpeed: 420,
@@ -1793,10 +1819,11 @@ export class BattleScene extends Phaser.Scene {
         nextSpecialAt: 0,
         jumpReadyAt: 0,
         jumpUntil: 0,
+        jumpDurationMs: 430,
         fireVisualUntil: 0,
         contactReadyAt: 0,
+        vehicleEntryReadyAt: 0,
         aimAssistShots: 0,
-        rifleAimAssistEvery: 2,
         weaponIndex: 0,
         weapons: ['rifle'],
         ammo: {
@@ -1814,6 +1841,7 @@ export class BattleScene extends Phaser.Scene {
         },
         aim: new Phaser.Math.Vector2(1, 0),
         jumpVector: new Phaser.Math.Vector2(1, 0),
+        shadow,
         virtualControlId: playerId === 1 ? 1 : undefined,
         controls: {
           up: this.input.keyboard!.addKey(scheme.keys.up),
@@ -1852,33 +1880,43 @@ export class BattleScene extends Phaser.Scene {
     this.physics.add.existing(rect, true);
     const body = rect.body as Phaser.Physics.Arcade.StaticBody | undefined;
     body?.updateFromGameObject();
+    this.obstacleGroup?.add(rect);
     this.obstacleBodies.push(rect);
   }
 
   private setupColliders(): void {
-    for (const obstacle of this.obstacleBodies) {
-      this.physics.add.collider(
-        this.playerGroup!,
-        obstacle,
-        undefined,
-        (playerObject) => this.shouldPlayerCollideWithObstacle(playerObject as Phaser.GameObjects.GameObject, obstacle),
-      );
-      this.physics.add.collider(this.allyGroup!, obstacle);
-      this.physics.add.collider(this.enemyGroup!, obstacle);
-      this.physics.add.collider(this.bossGroup!, obstacle);
-      this.physics.add.collider(
-        this.vehicleGroup!,
-        obstacle,
-        undefined,
-        (vehicleObject) => this.shouldVehicleCollideWithObstacle(vehicleObject as Phaser.GameObjects.GameObject, obstacle),
-      );
-      this.physics.add.collider(this.playerBullets!, obstacle, (bullet) => {
-        this.handleObstacleBulletHit(bullet as Phaser.GameObjects.GameObject, obstacle);
-      });
-      this.physics.add.collider(this.enemyBullets!, obstacle, (bullet) => {
-        this.handleObstacleBulletHit(bullet as Phaser.GameObjects.GameObject, obstacle);
-      });
-    }
+    // One static group + one collider per moving group (instead of ~6 collider
+    // objects per obstacle); destroyed cover simply leaves the group.
+    const obstacles = this.obstacleGroup!;
+    this.physics.add.collider(
+      this.playerGroup!,
+      obstacles,
+      undefined,
+      (playerObject, obstacleObject) => this.shouldPlayerCollideWithObstacle(
+        playerObject as Phaser.GameObjects.GameObject,
+        obstacleObject as Phaser.GameObjects.Rectangle,
+      ),
+    );
+    this.physics.add.collider(this.allyGroup!, obstacles);
+    this.physics.add.collider(this.enemyGroup!, obstacles);
+    this.physics.add.collider(this.bossGroup!, obstacles);
+    this.physics.add.collider(
+      this.vehicleGroup!,
+      obstacles,
+      undefined,
+      (vehicleObject, obstacleObject) => this.shouldVehicleCollideWithObstacle(
+        vehicleObject as Phaser.GameObjects.GameObject,
+        obstacleObject as Phaser.GameObjects.Rectangle,
+      ),
+    );
+    // Overlap (not collider) so the impact resolves exactly where the round
+    // crossed the cover instead of after positional separation shifted it.
+    this.physics.add.overlap(this.playerBullets!, obstacles, (bullet, obstacleObject) => {
+      this.handleObstacleBulletHit(bullet as Phaser.GameObjects.GameObject, obstacleObject as Phaser.GameObjects.Rectangle, true);
+    });
+    this.physics.add.overlap(this.enemyBullets!, obstacles, (bullet, obstacleObject) => {
+      this.handleObstacleBulletHit(bullet as Phaser.GameObjects.GameObject, obstacleObject as Phaser.GameObjects.Rectangle, false);
+    });
 
     this.physics.add.overlap(this.playerBullets!, this.enemyGroup!, (bullet, enemy) => {
       this.handleEnemyHit(bullet as Phaser.GameObjects.GameObject, enemy as Phaser.GameObjects.GameObject);
@@ -1936,7 +1974,9 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (this.time.now < player.jumpUntil) {
-      this.destroyDestructibleObstacle(obstacle, String(obstacle.getData('coverLabel') ?? 'COVER'), false);
+      // Vaulting batters soft cover instead of deleting it outright; the
+      // player still clears it while airborne.
+      this.damageCoverObstacle(obstacle, 40, false);
       this.createHitSpark(player.sprite.x, player.sprite.y, player.tint, 'VAULT');
       return false;
     }
@@ -2048,15 +2088,12 @@ export class BattleScene extends Phaser.Scene {
     const portrait = height > width;
     const targetWidth = portrait ? 1000 : 1100;
     const minZoom = portrait ? 0.44 : 0.72;
-    const fitStageHeightZoom = portrait
-      ? Phaser.Math.Clamp(height / Math.max(1, stage.worldHeight - 16), minZoom, 1)
-      : minZoom;
     const responsiveZoom = width > 960 && height > 620
       ? 1
       : Phaser.Math.Clamp(width / targetWidth, minZoom, 1);
-    const zoom = portrait
-      ? Math.max(responsiveZoom, fitStageHeightZoom)
-      : responsiveZoom;
+    // Whatever the responsive choice, the camera may never see outside the
+    // world — this floor applies in BOTH orientations (v1 only fit portrait).
+    const zoom = Math.max(responsiveZoom, this.getMinimumPlayableZoom());
 
     this.cameras.main.setZoom(zoom);
     this.baseCameraZoom = zoom;
@@ -2078,10 +2115,12 @@ export class BattleScene extends Phaser.Scene {
       if (!player.alive) {
         player.sprite.setVelocity(0, 0);
         player.sprite.setScale(1);
+        player.shadow.setVisible(false);
         continue;
       }
 
       if (player.vehicle?.active) {
+        player.shadow.setVisible(false);
         this.updateVehicleDriver(player, time);
         continue;
       }
@@ -2107,7 +2146,7 @@ export class BattleScene extends Phaser.Scene {
         }
         jumpVector.normalize();
         player.jumpVector.copy(jumpVector);
-        player.jumpUntil = time + 430;
+        player.jumpUntil = time + player.jumpDurationMs;
         player.jumpReadyAt = time + 760;
         player.aim.copy(jumpVector);
       }
@@ -2121,22 +2160,23 @@ export class BattleScene extends Phaser.Scene {
       let speed = player.moveSpeed;
 
       if (nowJumping) {
-        const remaining = Math.max(0, player.jumpUntil - time) / 430;
+        const remaining = Math.max(0, player.jumpUntil - time) / player.jumpDurationMs;
         const jumpSpeed = player.jumpSpeed * 1.55 * (0.55 + remaining * 0.45);
         player.sprite.setVelocity(player.jumpVector.x * jumpSpeed, player.jumpVector.y * jumpSpeed);
-        player.sprite.setScale(1.12);
+        // Sine arc + detached ground shadow sell the airborne dodge window.
+        const arc = Math.sin((1 - remaining) * Math.PI);
+        player.sprite.setScale(1 + arc * 0.26);
+        player.shadow.setVisible(true);
+        player.shadow.setPosition(player.sprite.x, player.sprite.y + 15 + arc * 5);
+        player.shadow.setScale(1 - arc * 0.35);
+        player.shadow.setAlpha(0.28 - arc * 0.12);
         animation = animationKey('player-jump');
       } else {
         player.sprite.setScale(1);
+        player.shadow.setVisible(false);
         if (movement.lengthSq() > 0) {
           speed = wantsFire ? player.walkSpeed : player.moveSpeed;
-          if (terrain?.effect === 'water') {
-            speed *= 0.58;
-          } else if (terrain?.effect === 'hole') {
-            speed *= 0.46;
-          } else if (terrain?.effect === 'high') {
-            speed *= 0.94;
-          }
+          speed *= terrainSpeedMultiplier(terrain?.effect);
           player.sprite.setVelocity(movement.x * speed, movement.y * speed);
           animation = wantsFire ? animationKey('player-walk') : animationKey('player-run');
         } else {
@@ -2192,7 +2232,8 @@ export class BattleScene extends Phaser.Scene {
       const distance = direction.length();
       if (distance > 18) {
         direction.normalize();
-        const speed = distance > 180 ? 235 : 175;
+        const speed = (distance > 180 ? 235 : 175)
+          * terrainSpeedMultiplier(this.getTerrainAt(ally.sprite.x, ally.sprite.y)?.effect);
         ally.sprite.setVelocity(direction.x * speed, direction.y * speed);
         ally.sprite.setRotation(direction.angle());
         this.playLoop(ally.sprite, animationKey('player-run'));
@@ -2221,7 +2262,15 @@ export class BattleScene extends Phaser.Scene {
     ally.nextFireAt = time + Phaser.Math.Between(520, 760);
     const muzzle = this.findClearBulletStart(ally.sprite.x + direction.x * 20, ally.sprite.y + direction.y * 20, direction);
     this.createMuzzleFlash(muzzle.x, muzzle.y, direction, 0xaee8ff);
-    this.firePlayerBullet(muzzle.x, muzzle.y, direction, 385, 22, 0xaee8ff, 480, 1.35, 0.95);
+    this.firePlayerBullet(muzzle.x, muzzle.y, {
+      direction,
+      speed: 385,
+      damage: 22,
+      tint: 0xaee8ff,
+      maxDistance: 480,
+      scaleX: 1.35,
+      scaleY: 0.95,
+    });
     this.playLoop(ally.sprite, animationKey('player-fire'));
   }
 
@@ -2265,7 +2314,8 @@ export class BattleScene extends Phaser.Scene {
     const vehicleBody = vehicle.body.body as Phaser.Physics.Arcade.Body;
     if (movement.lengthSq() > 0) {
       movement.normalize();
-      vehicleBody.setVelocity(movement.x * vehicle.speed, movement.y * vehicle.speed);
+      const vehicleSpeed = vehicle.speed * terrainSpeedMultiplier(this.getTerrainAt(vehicle.body.x, vehicle.body.y)?.effect);
+      vehicleBody.setVelocity(movement.x * vehicleSpeed, movement.y * vehicleSpeed);
       vehicle.body.setRotation(movement.angle());
       player.aim.copy(movement);
     } else {
@@ -2274,7 +2324,6 @@ export class BattleScene extends Phaser.Scene {
     }
 
     player.sprite.setPosition(vehicle.body.x, vehicle.body.y);
-    player.sprite.setVelocity(0, 0);
     player.sprite.setAlpha(0.46);
     player.sprite.setDepth(12);
     player.sprite.setRotation(player.aim.angle());
@@ -2459,24 +2508,18 @@ export class BattleScene extends Phaser.Scene {
 
     for (let pellet = 0; pellet < 5; pellet += 1) {
       const offset = Phaser.Math.Linear(-0.22, 0.22, pellet / 4) + Phaser.Math.FloatBetween(-0.035, 0.035);
-      this.firePlayerBullet(
-        start.x,
-        start.y,
-        direction.clone().rotate(offset),
-        410,
-        36,
+      this.firePlayerBullet(start.x, start.y, {
+        direction: direction.clone().rotate(offset),
+        speed: 410,
+        damage: 36,
         tint,
-        620,
-        1.65,
-        1.18,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        1,
-        0.72,
-        260,
-      );
+        maxDistance: 620,
+        scaleX: 1.65,
+        scaleY: 1.18,
+        pierceCount: 1,
+        dropStartRatio: 0.72,
+        tracerDistance: 260,
+      });
     }
   }
 
@@ -2484,24 +2527,20 @@ export class BattleScene extends Phaser.Scene {
     const tint = 0xffb35c;
     const start = this.getVehicleMuzzle(vehicle, direction, vehicle.body.width * 0.5 + 22);
     this.createMuzzleFlash(start.x, start.y, direction, accentTint || tint);
-    this.firePlayerBullet(
-      start.x,
-      start.y,
+    this.firePlayerBullet(start.x, start.y, {
       direction,
-      320,
-      115,
+      speed: 320,
+      damage: 115,
       tint,
-      980,
-      2.85,
-      1.8,
-      235,
-      150,
-      undefined,
-      undefined,
-      1,
-      0.84,
-      420,
-    );
+      maxDistance: 980,
+      scaleX: 2.85,
+      scaleY: 1.8,
+      splashRadius: 235,
+      splashDamage: 150,
+      pierceCount: 1,
+      dropStartRatio: 0.84,
+      tracerDistance: 420,
+    });
   }
 
   private exitVehicle(player: PlayerUnit, safeExit: boolean): void {
@@ -2513,11 +2552,39 @@ export class BattleScene extends Phaser.Scene {
     vehicle.driver = undefined;
     player.vehicle = undefined;
     player.sprite.setAlpha(1);
-    const offset = safeExit ? 42 : 22;
-    const exitX = Phaser.Math.Clamp(vehicle.body.x - Math.cos(vehicle.body.rotation) * offset, 24, (this.stage?.worldWidth ?? 2600) - 24);
-    const exitY = Phaser.Math.Clamp(vehicle.body.y - Math.sin(vehicle.body.rotation) * offset, 24, (this.stage?.worldHeight ?? 920) - 24);
+    player.vehicleEntryReadyAt = this.time.now + 700;
+
+    const playerBody = player.sprite.body as Phaser.Physics.Arcade.Body;
+    const worldWidth = this.stage?.worldWidth ?? 2600;
+    const worldHeight = this.stage?.worldHeight ?? 920;
+    const margin = safeExit ? 12 : 6;
+    // Bodies are axis-aligned, so the exit point must clear the vehicle AABB
+    // whatever the facing; try behind first, then the other cardinal sides.
+    const candidateAngles = [Math.PI, Math.PI * 0.5, -Math.PI * 0.5, 0];
+    let exitX = vehicle.body.x;
+    let exitY = vehicle.body.y;
+    for (const relativeAngle of candidateAngles) {
+      const angle = vehicle.body.rotation + relativeAngle;
+      const distance = vehicleExitDistance(
+        vehicle.body.width * 0.5,
+        vehicle.body.height * 0.5,
+        playerBody.halfWidth,
+        playerBody.halfHeight,
+        angle,
+        margin,
+      );
+      const candidateX = Phaser.Math.Clamp(vehicle.body.x + Math.cos(angle) * distance, 24, worldWidth - 24);
+      const candidateY = Phaser.Math.Clamp(vehicle.body.y + Math.sin(angle) * distance, 24, worldHeight - 24);
+      exitX = candidateX;
+      exitY = candidateY;
+      if (this.canPlaceRect(candidateX, candidateY, playerBody.width, playerBody.height, 2)) {
+        break;
+      }
+    }
+
+    playerBody.enable = true;
+    playerBody.reset(exitX, exitY);
     player.sprite.setPosition(exitX, exitY);
-    (player.sprite.body as Phaser.Physics.Arcade.Body).reset(exitX, exitY);
     this.unloadVehicleAllies(vehicle);
     this.showBanner(`${player.label} exited ${vehicle.kind.toUpperCase()}`, player.accent);
   }
@@ -2611,17 +2678,22 @@ export class BattleScene extends Phaser.Scene {
         continue;
       }
 
+      const stats = ENEMY_STATS[enemy.kind];
       const target = this.closestLivingPlayer(enemy.sprite.x, enemy.sprite.y);
       if (!target) {
         enemy.sprite.setVelocity(0, 0);
+        this.syncEnemyVisuals(enemy);
         continue;
       }
 
       const direction = new Phaser.Math.Vector2(target.sprite.x - enemy.sprite.x, target.sprite.y - enemy.sprite.y);
       const distance = direction.length();
-      direction.normalize();
-      enemy.sprite.setRotation(direction.angle());
-      this.syncEnemyVisuals(enemy);
+      if (distance > 1) {
+        direction.normalize();
+        enemy.sprite.setRotation(direction.angle());
+      } else {
+        direction.setTo(Math.cos(enemy.sprite.rotation), Math.sin(enemy.sprite.rotation));
+      }
       const hasSight = this.hasLineOfSight(enemy.sprite.x, enemy.sprite.y, target.sprite.x, target.sprite.y);
 
       if (!hasSight) {
@@ -2631,48 +2703,27 @@ export class BattleScene extends Phaser.Scene {
         continue;
       }
 
+      const moveSpeed = enemy.moveSpeed
+        * terrainSpeedMultiplier(this.getTerrainAt(enemy.sprite.x, enemy.sprite.y)?.effect);
+
       if (enemy.kind === 'zombie') {
-        enemy.sprite.setVelocity(direction.x * enemy.moveSpeed, direction.y * enemy.moveSpeed);
-        if (distance <= 34 && time >= enemy.contactReadyAt) {
-          enemy.contactReadyAt = time + 760;
-          this.createHitSpark(target.sprite.x, target.sprite.y, 0x9cff8a, '-bite');
-          this.damagePlayer(target, enemy.damage);
-        }
-      } else if (enemy.kind === 'scout') {
-        const desiredRange = 260;
-        const advance = distance > desiredRange ? 0.86 : distance < desiredRange * 0.55 ? -0.42 : 0;
-        const strafe = Math.sin(time / 360 + enemy.behaviorOffset) * 0.62;
-        const side = new Phaser.Math.Vector2(-direction.y, direction.x).scale(strafe);
-        const move = direction.clone().scale(advance).add(side);
-        if (move.lengthSq() > 0) {
-          move.normalize();
-          enemy.sprite.setVelocity(move.x * enemy.moveSpeed, move.y * enemy.moveSpeed);
-        } else {
-          enemy.sprite.setVelocity(0, 0);
+        enemy.sprite.setVelocity(direction.x * moveSpeed, direction.y * moveSpeed);
+        if (distance <= 34) {
+          this.applyMeleeContact(enemy, target, enemy.damage, 760, 0x9cff8a, '-bite');
         }
       } else if (enemy.kind === 'turret') {
         enemy.sprite.setVelocity(0, 0);
-      } else if (this.isMountedEnemy(enemy.kind)) {
-        const desiredRange = enemy.kind === 'tankRaider' ? 420 : enemy.kind === 'jeepRaider' ? 320 : 245;
-        const advance = distance > desiredRange ? 0.78 : distance < desiredRange * 0.58 ? -0.32 : 0;
-        const strafe = Math.sin(time / (enemy.kind === 'bikeRaider' ? 340 : 520) + enemy.behaviorOffset) * (enemy.kind === 'tankRaider' ? 0.16 : 0.36);
-        const side = new Phaser.Math.Vector2(-direction.y, direction.x).scale(strafe);
-        const move = direction.clone().scale(advance).add(side);
-        if (move.lengthSq() > 0) {
-          move.normalize();
-          enemy.sprite.setVelocity(move.x * enemy.moveSpeed, move.y * enemy.moveSpeed);
-        } else {
-          enemy.sprite.setVelocity(0, 0);
-        }
       } else {
-        const desiredRange = enemy.kind === 'rocketeer' ? 280 : 190;
-        const advance = distance > desiredRange ? 0.72 : distance < desiredRange * 0.45 ? -0.25 : 0;
-        const strafe = Math.sin(time / 520 + enemy.behaviorOffset) * 0.28;
+        const desiredRange = stats.desiredRange;
+        const advance = distance > desiredRange ? 0.8 : distance < desiredRange * 0.55 ? -0.36 : 0;
+        const strafe = stats.strafeAmount > 0
+          ? Math.sin(time / Math.max(1, stats.strafePeriodMs) + enemy.behaviorOffset) * stats.strafeAmount
+          : 0;
         const side = new Phaser.Math.Vector2(-direction.y, direction.x).scale(strafe);
         const move = direction.clone().scale(advance).add(side);
         if (move.lengthSq() > 0) {
           move.normalize();
-          enemy.sprite.setVelocity(move.x * enemy.moveSpeed, move.y * enemy.moveSpeed);
+          enemy.sprite.setVelocity(move.x * moveSpeed, move.y * moveSpeed);
         } else {
           enemy.sprite.setVelocity(0, 0);
         }
@@ -2680,19 +2731,22 @@ export class BattleScene extends Phaser.Scene {
 
       this.syncEnemyVisuals(enemy);
 
-      const fireRange = enemy.kind === 'tankRaider' ? 560 : enemy.kind === 'jeepRaider' ? 430 : enemy.kind === 'bikeRaider' ? 330 : enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'scout' ? 430 : 360;
-      if (enemy.kind !== 'zombie' && distance <= fireRange && time >= enemy.nextFireAt) {
+      if (stats.fireRange > 0 && distance > 1 && distance <= stats.fireRange && time >= enemy.nextFireAt) {
         if (enemy.kind === 'scout') {
           this.fireEnemyPoisonDart(enemy, direction);
         } else {
-          const spread = enemy.kind === 'tankRaider' ? 0.09 : enemy.kind === 'jeepRaider' ? 0.08 : enemy.kind === 'bikeRaider' ? 0.1 : enemy.kind === 'rocketeer' ? 0.12 : 0.05;
-          this.fireEnemyBullet(
+          const muzzle = this.findClearBulletStart(
             enemy.sprite.x + direction.x * 14,
             enemy.sprite.y + direction.y * 14,
-            direction.clone().rotate(Phaser.Math.FloatBetween(-spread, spread)),
+            direction,
+          );
+          this.fireEnemyBullet(
+            muzzle.x,
+            muzzle.y,
+            direction.clone().rotate(Phaser.Math.FloatBetween(-stats.fireSpread, stats.fireSpread)),
             enemy.bulletSpeed,
             enemy.damage,
-            enemy.kind === 'tankRaider' ? 0xffb35c : enemy.kind === 'jeepRaider' ? 0xffd08a : enemy.kind === 'bikeRaider' ? 0xff8a5c : enemy.kind === 'rocketeer' ? 0xff9359 : 0xff5b4a,
+            stats.bulletTint,
           );
         }
         enemy.nextFireAt = time + enemy.fireRate;
@@ -2702,6 +2756,41 @@ export class BattleScene extends Phaser.Scene {
       const action = enemy.kind !== 'zombie' && time < enemy.fireVisualUntil ? 'fire' : 'stand';
       this.playLoop(enemy.sprite, animationKey(getEnemyTextureKey(enemy.theme, enemy.kind, action)));
     }
+  }
+
+  /**
+   * Single melee-contact rule for zombies, soldier bumps, and boss rams:
+   * shared cooldowns, airborne dodge, and armor soak all live here.
+   */
+  private applyMeleeContact(
+    attacker: { contactReadyAt: number },
+    player: PlayerUnit,
+    damage: number,
+    cooldownMs: number,
+    sparkTint?: number,
+    sparkLabel?: string,
+  ): void {
+    const now = this.time.now;
+    if (!player.alive || now < player.contactReadyAt || now < attacker.contactReadyAt) {
+      return;
+    }
+
+    if (now < player.jumpUntil) {
+      return;
+    }
+
+    attacker.contactReadyAt = now + cooldownMs;
+    player.contactReadyAt = now + cooldownMs;
+
+    if (player.vehicle?.active) {
+      this.damageVehicle(player.vehicle, 1);
+      return;
+    }
+
+    if (sparkLabel) {
+      this.createHitSpark(player.sprite.x, player.sprite.y, sparkTint ?? 0xff5b4a, sparkLabel);
+    }
+    this.damagePlayer(player, damage);
   }
 
   private updateBoss(time: number): void {
@@ -2799,8 +2888,9 @@ export class BattleScene extends Phaser.Scene {
         continue;
       }
 
-      const range = enemy.kind === 'zombie' ? 210 : enemy.kind === 'tankRaider' ? 560 : enemy.kind === 'jeepRaider' ? 430 : enemy.kind === 'bikeRaider' ? 330 : enemy.kind === 'scout' ? 430 : enemy.kind === 'rocketeer' ? 470 : enemy.kind === 'turret' ? 420 : 360;
-      const halfAngle = enemy.kind === 'zombie' ? 0.62 : enemy.kind === 'tankRaider' ? 0.34 : enemy.kind === 'jeepRaider' ? 0.4 : enemy.kind === 'bikeRaider' ? 0.46 : enemy.kind === 'scout' ? 0.52 : enemy.kind === 'turret' ? 0.3 : 0.42;
+      const stats = ENEMY_STATS[enemy.kind];
+      const range = enemy.kind === 'zombie' ? 210 : stats.fireRange;
+      const halfAngle = stats.visionHalfAngle;
       const angle = enemy.sprite.rotation;
       const leftX = enemy.sprite.x + Math.cos(angle - halfAngle) * range;
       const leftY = enemy.sprite.y + Math.sin(angle - halfAngle) * range;
@@ -2825,7 +2915,7 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private updateCameraAnchor(): void {
+  private updateCameraAnchor(delta: number): void {
     if (!this.cameraTarget) {
       return;
     }
@@ -2849,12 +2939,12 @@ export class BattleScene extends Phaser.Scene {
         : new Phaser.Math.Vector2(1, 0);
       const height = this.getTerrainAt(highGroundPlayer.sprite.x, highGroundPlayer.sprite.y)?.height ?? 2;
       this.cameraTarget.setPosition(focusX + ahead.x * (150 + height * 44), focusY + ahead.y * (70 + height * 18));
-      this.setCameraZoomForViewRange(height);
+      this.setCameraZoomForViewRange(height, delta);
       return;
     }
 
     this.cameraTarget.setPosition(focusX, focusY);
-    this.setCameraZoomForViewRange(0);
+    this.setCameraZoomForViewRange(0, delta);
   }
 
   private keepActorsInsideVisiblePlayfield(): void {
@@ -2882,7 +2972,6 @@ export class BattleScene extends Phaser.Scene {
       if (vehicle?.driver === player) {
         this.clampBodyToVisiblePlayfield(vehicle.body, minX, maxX, minY, maxY);
         player.sprite.setPosition(vehicle.body.x, vehicle.body.y);
-        (player.sprite.body as Phaser.Physics.Arcade.Body).reset(vehicle.body.x, vehicle.body.y);
         continue;
       }
 
@@ -2908,12 +2997,19 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const body = object.body as Phaser.Physics.Arcade.Body | undefined;
-    body?.reset(clampedX, clampedY);
-    if (changedX) {
-      body?.setVelocityX(0);
-    }
-    if (changedY) {
-      body?.setVelocityY(0);
+    if (body?.enable) {
+      // Never shove an actor into cover just because the camera edge moved
+      // (the high-ground zoom effect shifts the view while actors stand still).
+      if (!this.canPlaceRect(clampedX, clampedY, body.width, body.height, 0)) {
+        return;
+      }
+
+      // Preserve the along-edge velocity so the clamp doesn't stutter
+      // movement; only the outward component is cancelled.
+      const keepVelocityX = changedX ? 0 : body.velocity.x;
+      const keepVelocityY = changedY ? 0 : body.velocity.y;
+      body.reset(clampedX, clampedY);
+      body.setVelocity(keepVelocityX, keepVelocityY);
     }
     object.setPosition(clampedX, clampedY);
   }
@@ -2933,18 +3029,33 @@ export class BattleScene extends Phaser.Scene {
     return this.getTerrainAt(landingX, landingY)?.effect === 'high';
   }
 
-  private setCameraZoomForViewRange(height: number): void {
+  private setCameraZoomForViewRange(height: number, delta: number): void {
     const minPlayableZoom = this.getMinimumPlayableZoom();
     const targetZoom = height > 0
       ? Math.max(minPlayableZoom, this.baseCameraZoom - (height >= 3 ? 0.17 : 0.12))
       : this.baseCameraZoom;
-    this.cameras.main.setZoom(Phaser.Math.Linear(this.cameras.main.zoom, targetZoom, 0.08));
+    const nextZoom = expDecayLerp(this.cameras.main.zoom, targetZoom, 5, delta);
+    if (Math.abs(nextZoom - this.cameras.main.zoom) < 0.0001) {
+      return;
+    }
+
+    this.cameras.main.setZoom(nextZoom);
+    this.layoutOverlayText();
   }
 
+  /**
+   * The one invariant that kills the whole background-void bug class: the
+   * camera viewport must never be larger than the painted world, at any
+   * window size, in either axis.
+   */
   private getMinimumPlayableZoom(): number {
     const stage = this.stage ?? this.director.getSnapshot().currentStage;
-    const height = Math.max(1, this.scale.height);
-    return Math.min(1, Math.max(0.42, height / Math.max(1, stage.worldHeight - 16)));
+    return minimumZoomToCoverWorld(
+      Math.max(1, this.scale.width),
+      Math.max(1, this.scale.height),
+      stage.worldWidth,
+      stage.worldHeight,
+    );
   }
 
   private checkEncounterTriggers(): void {
@@ -3042,43 +3153,51 @@ export class BattleScene extends Phaser.Scene {
     encounterId: string,
     targetX = x,
     targetY = y,
-  ): void {
+  ): boolean {
     if (!this.playing && encounterId !== 'boss-support') {
-      return;
+      return false;
     }
+    const stats = ENEMY_STATS[kind];
     const theme = this.stage?.theme ?? 'emerald';
-    const sprite = this.physics.add.sprite(x, y, getEnemyTextureKey(theme, kind, 'stand'), 0);
-    sprite.setDepth(kind === 'turret' ? 8 : 11);
-    sprite.setCollideWorldBounds(true);
-    if (kind === 'zombie') {
-      sprite.setScale(0.84);
-      sprite.setTint(0x9bdc73);
-    } else if (kind === 'scout') {
-      sprite.setScale(0.72);
-      sprite.setTint(0x93ffcb);
-    } else if (this.isMountedEnemy(kind)) {
-      sprite.setScale(kind === 'tankRaider' ? 0.64 : 0.7);
-      sprite.setTint(kind === 'tankRaider' ? 0xffc17d : kind === 'jeepRaider' ? 0xff9f5c : 0xff795c);
-      sprite.setDepth(14);
+
+    // Stage data sometimes parks a post inside cover; relocate to the nearest
+    // open spot so no encounter member spawns buried and unkillable.
+    if (this.stage) {
+      const safe = this.findOpenCoverSpot(targetX, targetY, stats.bodyWidth, stats.bodyHeight, this.stage, 6);
+      if (safe) {
+        if (targetX === x && targetY === y) {
+          x = safe.x;
+          y = safe.y;
+        }
+        targetX = safe.x;
+        targetY = safe.y;
+      }
     }
-    this.configureBody(
-      sprite,
-      kind === 'tankRaider' ? 76 : kind === 'jeepRaider' ? 58 : kind === 'bikeRaider' ? 42 : kind === 'turret' ? 20 : kind === 'zombie' || kind === 'scout' ? 13 : 16,
-      kind === 'tankRaider' ? 42 : kind === 'jeepRaider' ? 32 : kind === 'bikeRaider' ? 24 : 14,
-    );
+
+    const sprite = this.physics.add.sprite(x, y, getEnemyTextureKey(theme, kind, 'stand'), 0);
+    sprite.setDepth(stats.depth);
+    sprite.setCollideWorldBounds(true);
+    sprite.setScale(stats.spriteScale);
+    if (stats.tint !== undefined) {
+      sprite.setTint(stats.tint);
+      sprite.setData('baseTint', stats.tint);
+    }
+    // Stats give the wanted world-space hitbox; setSize is in source pixels,
+    // so divide the sprite scale back out.
+    this.configureBody(sprite, stats.bodyWidth / stats.spriteScale, stats.bodyHeight / stats.spriteScale);
 
     const enemy: EnemyUnit = {
       id,
       kind,
       theme,
       sprite,
-      health: kind === 'tankRaider' ? 560 : kind === 'jeepRaider' ? 260 : kind === 'bikeRaider' ? 80 : kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
-      maxHealth: kind === 'tankRaider' ? 560 : kind === 'jeepRaider' ? 260 : kind === 'bikeRaider' ? 80 : kind === 'scout' ? 24 : kind === 'zombie' ? 28 : kind === 'turret' ? 130 : kind === 'rocketeer' ? 85 : 50,
+      health: stats.health,
+      maxHealth: stats.health,
       alive: true,
-      moveSpeed: kind === 'bikeRaider' ? 128 : kind === 'jeepRaider' ? 94 : kind === 'tankRaider' ? 54 : kind === 'scout' ? 96 : kind === 'zombie' ? 96 : kind === 'rocketeer' ? 48 : kind === 'turret' ? 0 : 62,
-      fireRate: kind === 'tankRaider' ? 1420 : kind === 'jeepRaider' ? 980 : kind === 'bikeRaider' ? 1180 : kind === 'scout' ? 1520 : kind === 'rocketeer' ? 1400 : kind === 'turret' ? 1050 : 900,
-      bulletSpeed: kind === 'tankRaider' ? 300 : kind === 'jeepRaider' ? 340 : kind === 'bikeRaider' ? 310 : kind === 'scout' ? 280 : kind === 'rocketeer' ? 265 : kind === 'turret' ? 340 : 300,
-      damage: kind === 'tankRaider' ? 22 : kind === 'jeepRaider' ? 14 : kind === 'bikeRaider' ? 10 : kind === 'scout' ? 14 : kind === 'zombie' ? 8 : kind === 'rocketeer' ? 18 : kind === 'turret' ? 12 : 10,
+      moveSpeed: stats.moveSpeed,
+      fireRate: stats.fireRate,
+      bulletSpeed: stats.bulletSpeed,
+      damage: stats.damage,
       nextFireAt: this.time.now + Phaser.Math.Between(250, 850),
       fireVisualUntil: 0,
       contactReadyAt: 0,
@@ -3113,6 +3232,8 @@ export class BattleScene extends Phaser.Scene {
         },
       });
     }
+
+    return true;
   }
 
   private spawnBoss(): void {
@@ -3133,10 +3254,20 @@ export class BattleScene extends Phaser.Scene {
     const sprite = this.physics.add.sprite(config.x, config.y, getBossTextureKey(config.kind), 0);
     sprite.setDepth(13);
     sprite.setCollideWorldBounds(true);
-    this.configureBody(sprite, 72, 40);
+    // Hitboxes sized to the drawn hull (gunship ~168px wide, barge tall,
+    // command tank broad) instead of the old uniform 72x40 sliver.
+    if (config.kind === 'gunship') {
+      this.configureBody(sprite, 124, 46);
+    } else if (config.kind === 'barge') {
+      this.configureBody(sprite, 110, 84);
+    } else {
+      this.configureBody(sprite, 116, 64);
+    }
     sprite.setFrame(0);
     sprite.setAlpha(0.18);
-    sprite.setTint(config.kind === 'gunship' ? 0xb8e8ff : config.kind === 'barge' ? 0xffd694 : 0xf0d36b);
+    const baseTint = config.kind === 'gunship' ? 0xb8e8ff : config.kind === 'barge' ? 0xffd694 : 0xf0d36b;
+    sprite.setTint(baseTint);
+    sprite.setData('baseTint', baseTint);
 
     const boss: BossUnit = {
       config,
@@ -3290,25 +3421,23 @@ export class BattleScene extends Phaser.Scene {
         ? 0
         : Phaser.Math.Linear(-weapon.spread, weapon.spread, pellet / (pelletCount - 1));
       const pelletDirection = direction.clone().rotate(offset + Phaser.Math.FloatBetween(-weapon.spread * 0.15, weapon.spread * 0.15));
-      this.firePlayerBullet(
-        startX,
-        startY,
-        pelletDirection,
-        weapon.bulletSpeed,
-        weapon.damage,
-        weapon.tint,
-        weapon.maxDistance,
-        weapon.scaleX,
-        weapon.scaleY,
-        weapon.splashRadius,
-        weapon.splashDamage,
-        weapon.poisonRadius,
-        weapon.poisonDamage,
-        weapon.pierceCount,
-        weapon.dropStartRatio,
-        weapon.tracerDistance,
-        weapon.projectileTexture,
-      );
+      this.firePlayerBullet(startX, startY, {
+        direction: pelletDirection,
+        speed: weapon.bulletSpeed,
+        damage: weapon.damage,
+        tint: weapon.tint,
+        maxDistance: weapon.maxDistance,
+        scaleX: weapon.scaleX,
+        scaleY: weapon.scaleY,
+        splashRadius: weapon.splashRadius,
+        splashDamage: weapon.splashDamage,
+        poisonRadius: weapon.poisonRadius,
+        poisonDamage: weapon.poisonDamage,
+        pierceCount: weapon.pierceCount,
+        dropStartRatio: weapon.dropStartRatio,
+        tracerDistance: weapon.tracerDistance,
+        projectileTexture: weapon.projectileTexture,
+      });
     }
     player.nextFireAt = time + weapon.fireRate;
   }
@@ -3329,7 +3458,6 @@ export class BattleScene extends Phaser.Scene {
       if (player.aimAssistShots >= 2) {
         shouldAssist = true;
         player.aimAssistShots = 0;
-        player.rifleAimAssistEvery = 2;
       }
     } else if (weapon.pellets === 1) {
       shouldAssist = true;
@@ -3640,25 +3768,19 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private firePlayerBullet(
-    x: number,
-    y: number,
-    direction: Phaser.Math.Vector2,
-    speed: number,
-    damage: number,
-    tint: number,
-    maxDistance: number,
-    scaleX: number,
-    scaleY: number,
-    splashRadius?: number,
-    splashDamage?: number,
-    poisonRadius?: number,
-    poisonDamage?: number,
-    pierceCount?: number,
-    dropStartRatio?: number,
-    tracerDistance?: number,
-    projectileTexture = 'bullet-shell',
-  ): void {
+  private firePlayerBullet(x: number, y: number, options: ProjectileOptions): void {
+    const {
+      direction,
+      speed,
+      damage,
+      tint,
+      maxDistance,
+      scaleX,
+      scaleY,
+      pierceCount,
+      tracerDistance,
+      projectileTexture = 'bullet-shell',
+    } = options;
     const bullet = this.physics.add.image(x, y, projectileTexture);
     bullet.setTint(tint);
     bullet.setDepth(16);
@@ -3667,18 +3789,18 @@ export class BattleScene extends Phaser.Scene {
     bullet.setData('baseScaleX', bullet.scaleX);
     bullet.setData('baseScaleY', bullet.scaleY);
     bullet.setData('baseTint', tint);
-    this.configureBulletBody(bullet, direction, speed, maxDistance, dropStartRatio);
+    this.playerBullets?.add(bullet);
+    this.configureBulletBody(bullet, direction, speed, maxDistance, options.dropStartRatio);
     bullet.setRotation(direction.angle());
     bullet.setData('damage', damage);
-    bullet.setData('splashRadius', splashRadius ?? 0);
-    bullet.setData('splashDamage', splashDamage ?? 0);
-    bullet.setData('poisonRadius', poisonRadius ?? 0);
-    bullet.setData('poisonDamage', poisonDamage ?? 0);
+    bullet.setData('splashRadius', options.splashRadius ?? 0);
+    bullet.setData('splashDamage', options.splashDamage ?? 0);
+    bullet.setData('poisonRadius', options.poisonRadius ?? 0);
+    bullet.setData('poisonDamage', options.poisonDamage ?? 0);
     bullet.setData('splashTint', tint);
     bullet.setData('pierceRemaining', pierceCount ?? 1);
     bullet.setData('hitTargets', []);
     bullet.setData('expiry', this.time.now + (pierceCount && pierceCount > 1 ? 4200 : 2600));
-    this.playerBullets?.add(bullet);
     this.createBulletTracer(x, y, direction, tint, tracerDistance ?? Math.min(340, maxDistance * 0.46), 520);
   }
 
@@ -3688,12 +3810,25 @@ export class BattleScene extends Phaser.Scene {
     direction: Phaser.Math.Vector2,
     weapon: WeaponSpec,
   ): void {
-    const endX = x + direction.x * weapon.maxDistance;
-    const endY = y + direction.y * weapon.maxDistance;
+    // The beam stops at the first obstacle: lasers no longer melt enemies
+    // through bunkers and boundary walls.
+    const fullEndX = x + direction.x * weapon.maxDistance;
+    const fullEndY = y + direction.y * weapon.maxDistance;
+    const blockerRects = this.obstacleBodies
+      .filter((obstacle) => obstacle.active)
+      .map((obstacle) => obstacle.getBounds());
+    const hit = clipSegmentToRects(x, y, fullEndX, fullEndY, blockerRects);
+    const endX = hit?.x ?? fullEndX;
+    const endY = hit?.y ?? fullEndY;
+    const beamLength = Math.max(12, Phaser.Math.Distance.Between(x, y, endX, endY));
+    if (hit) {
+      this.createHitSpark(endX, endY, weapon.tint);
+    }
+
     const beam = this.add.rectangle(
-      x + direction.x * weapon.maxDistance * 0.5,
-      y + direction.y * weapon.maxDistance * 0.5,
-      weapon.maxDistance,
+      (x + endX) * 0.5,
+      (y + endY) * 0.5,
+      beamLength,
       weapon.beamWidth ?? 24,
       weapon.tint,
       0.62,
@@ -3704,9 +3839,9 @@ export class BattleScene extends Phaser.Scene {
     beam.setBlendMode(Phaser.BlendModes.ADD);
 
     const core = this.add.rectangle(
-      x + direction.x * weapon.maxDistance * 0.5,
-      y + direction.y * weapon.maxDistance * 0.5,
-      weapon.maxDistance,
+      (x + endX) * 0.5,
+      (y + endY) * 0.5,
+      beamLength,
       Math.max(6, (weapon.beamWidth ?? 24) * 0.32),
       0xffffff,
       0.78,
@@ -3728,6 +3863,7 @@ export class BattleScene extends Phaser.Scene {
     });
 
     this.damageActorsAlongBeam(x, y, endX, endY, weapon);
+    this.createBulletTracer(x, y, direction, weapon.tint, Math.min(beamLength, 340), 280);
   }
 
   private damageActorsAlongBeam(
@@ -3823,6 +3959,10 @@ export class BattleScene extends Phaser.Scene {
     damage: number,
     tint: number,
   ): void {
+    if (direction.lengthSq() === 0) {
+      return;
+    }
+
     const bullet = this.physics.add.image(x, y, 'bullet-shell');
     bullet.setTint(tint);
     bullet.setDepth(15);
@@ -3831,21 +3971,28 @@ export class BattleScene extends Phaser.Scene {
     bullet.setData('baseScaleX', bullet.scaleX);
     bullet.setData('baseScaleY', bullet.scaleY);
     bullet.setData('baseTint', tint);
+    this.enemyBullets?.add(bullet);
     this.configureBulletBody(bullet, direction, speed, 720);
     bullet.setRotation(direction.angle());
     bullet.setData('damage', damage);
     bullet.setData('expiry', this.time.now + 2200);
-    this.enemyBullets?.add(bullet);
     this.createMuzzleFlash(x, y, direction, tint);
     this.createBulletTracer(x, y, direction, tint, 180, 360);
   }
 
   private fireEnemyPoisonDart(enemy: EnemyUnit, direction: Phaser.Math.Vector2): void {
+    if (direction.lengthSq() === 0) {
+      return;
+    }
+
     const tint = 0x8cff6a;
-    const startX = enemy.sprite.x + direction.x * 14;
-    const startY = enemy.sprite.y + direction.y * 14;
+    const start = this.findClearBulletStart(
+      enemy.sprite.x + direction.x * 14,
+      enemy.sprite.y + direction.y * 14,
+      direction,
+    );
     const dartDirection = direction.clone().rotate(Phaser.Math.FloatBetween(-0.08, 0.08));
-    const bullet = this.physics.add.image(startX, startY, 'bullet-shell');
+    const bullet = this.physics.add.image(start.x, start.y, 'bullet-shell');
     bullet.setTint(tint);
     bullet.setDepth(15);
     bullet.setScale(1.08, 0.82);
@@ -3853,14 +4000,14 @@ export class BattleScene extends Phaser.Scene {
     bullet.setData('baseScaleX', bullet.scaleX);
     bullet.setData('baseScaleY', bullet.scaleY);
     bullet.setData('baseTint', tint);
+    this.enemyBullets?.add(bullet);
     this.configureBulletBody(bullet, dartDirection, enemy.bulletSpeed, 680, 0.88);
     bullet.setRotation(dartDirection.angle());
     bullet.setData('damage', enemy.damage);
     bullet.setData('poison', true);
     bullet.setData('expiry', this.time.now + 2300);
-    this.enemyBullets?.add(bullet);
-    this.createMuzzleFlash(startX, startY, dartDirection, tint);
-    this.createBulletTracer(startX, startY, dartDirection, tint, 120, 300);
+    this.createMuzzleFlash(start.x, start.y, dartDirection, tint);
+    this.createBulletTracer(start.x, start.y, dartDirection, tint, 120, 300);
   }
 
   private configureBulletBody(
@@ -3872,13 +4019,21 @@ export class BattleScene extends Phaser.Scene {
   ): void {
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     body.setAllowGravity(false);
-    body.setSize(10, 5);
-    body.setOffset((bullet.width - 10) * 0.5, (bullet.height - 5) * 0.5);
-    body.setVelocity(0, 0);
+    // Compact near-square hitbox in world space regardless of the stretched
+    // visual scale, so hit width no longer depends on travel direction.
+    const worldSize = 8;
+    body.setSize(
+      worldSize / Math.max(0.01, Math.abs(bullet.scaleX)),
+      worldSize / Math.max(0.01, Math.abs(bullet.scaleY)),
+      true,
+    );
+    // The engine owns bullet kinematics: velocity is px/s and integrates on
+    // the fixed physics step, which keeps trajectories identical at any FPS.
+    body.setVelocity(direction.x * speed, direction.y * speed);
     bullet.setData('originX', bullet.x);
     bullet.setData('originY', bullet.y);
-    bullet.setData('velocityX', direction.x * speed);
-    bullet.setData('velocityY', direction.y * speed);
+    bullet.setData('baseVelocityX', direction.x * speed);
+    bullet.setData('baseVelocityY', direction.y * speed);
     bullet.setData('maxDistance', maxDistance);
     bullet.setData('baseMaxDistance', maxDistance);
     bullet.setData('baseDropStartRatio', dropStartRatio);
@@ -3985,7 +4140,9 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    this.resolvePlayerBulletImpact(bullet, impactX, impactY);
+    // The direct target already took full damage; exclude it from its own
+    // splash so launcher rounds stop double-dipping.
+    this.resolvePlayerBulletImpact(bullet, impactX, impactY, enemy);
   }
 
   private handleBossHit(bulletObject: Phaser.GameObjects.GameObject, bossObject: Phaser.GameObjects.GameObject): void {
@@ -4000,13 +4157,18 @@ export class BattleScene extends Phaser.Scene {
     const impactY = boss.sprite.y;
     this.createHitSpark(impactX, impactY, 0xff8457, `-${damage}`);
     this.damageBoss(boss, damage);
-    this.resolvePlayerBulletImpact(bullet, impactX, impactY);
+    this.resolvePlayerBulletImpact(bullet, impactX, impactY, undefined, boss);
   }
 
   private handlePlayerHit(bulletObject: Phaser.GameObjects.GameObject, playerObject: Phaser.GameObjects.GameObject): void {
     const bullet = bulletObject as Phaser.Physics.Arcade.Image;
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
     if (!player || !player.alive || !bullet.active) {
+      return;
+    }
+
+    // Airborne dodge: the jump clears low fire, so the round passes under.
+    if (this.time.now < player.jumpUntil) {
       return;
     }
 
@@ -4034,6 +4196,7 @@ export class BattleScene extends Phaser.Scene {
   private handleObstacleBulletHit(
     bulletObject: Phaser.GameObjects.GameObject,
     obstacleObject: Phaser.GameObjects.GameObject,
+    fromPlayer: boolean,
   ): void {
     const bullet = bulletObject as Phaser.Physics.Arcade.Image;
     const obstacle = obstacleObject as Phaser.GameObjects.Rectangle;
@@ -4041,16 +4204,22 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    const destructible = Boolean(obstacle.getData('destructibleObstacle'));
+    // Only player fire breaks cover open — enemies no longer demolish their
+    // own bunkers and gift the reward crates inside.
+    const destructible = fromPlayer && Boolean(obstacle.getData('destructibleObstacle'));
     if (!destructible) {
       this.destroyBulletObject(bullet);
       return;
     }
 
     const damage = Math.max(8, Number(bullet.getData('damage') ?? 20));
-    const nextHp = Number(obstacle.getData('coverHp') ?? 0) - damage;
-    const label = String(obstacle.getData('coverLabel') ?? 'COVER');
     this.resolvePlayerBulletImpact(bullet, bullet.x, bullet.y);
+    this.damageCoverObstacle(obstacle, damage, true);
+  }
+
+  private damageCoverObstacle(obstacle: Phaser.GameObjects.Rectangle, damage: number, revealReward: boolean): void {
+    const label = String(obstacle.getData('coverLabel') ?? 'COVER');
+    const nextHp = Number(obstacle.getData('coverHp') ?? 0) - damage;
 
     if (nextHp > 0) {
       obstacle.setData('coverHp', nextHp);
@@ -4059,11 +4228,12 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    this.destroyDestructibleObstacle(obstacle, label);
+    this.destroyDestructibleObstacle(obstacle, label, revealReward);
   }
 
   private destroyDestructibleObstacle(obstacle: Phaser.GameObjects.Rectangle, label: string, revealReward = true): void {
     this.obstacleBodies = this.obstacleBodies.filter((entry) => entry !== obstacle);
+    this.obstacleGroup?.remove(obstacle);
     this.physics.world.disable(obstacle);
     obstacle.setData('destroyedObstacle', true);
     this.createHitSpark(obstacle.x, obstacle.y, 0xfff0aa, `${label} OPEN`);
@@ -4283,8 +4453,15 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    if (this.time.now < player.vehicleEntryReadyAt) {
+      return;
+    }
+
     player.vehicle = vehicle;
     vehicle.driver = player;
+    // The rider's own body goes dormant while driving; the vehicle body is
+    // the only collider, so bullets and contacts resolve against armor.
+    (player.sprite.body as Phaser.Physics.Arcade.Body).enable = false;
     player.sprite.setAlpha(0.46);
     player.sprite.setPosition(vehicle.body.x, vehicle.body.y);
     const boarded = this.boardNearbyAllies(vehicle);
@@ -4362,17 +4539,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    if (player.vehicle?.active) {
-      return;
-    }
-
-    if (this.time.now < player.contactReadyAt || this.time.now < enemy.contactReadyAt) {
-      return;
-    }
-
-    player.contactReadyAt = this.time.now + 520;
-    enemy.contactReadyAt = this.time.now + 520;
-    this.damagePlayer(player, enemy.kind === 'rocketeer' ? 12 : 8);
+    this.applyMeleeContact(enemy, player, enemy.kind === 'rocketeer' ? 12 : 8, 520);
   }
 
   private handleBossContact(playerObject: Phaser.GameObjects.GameObject, bossObject: Phaser.GameObjects.GameObject): void {
@@ -4382,13 +4549,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    if (this.time.now < player.contactReadyAt || this.time.now < boss.contactReadyAt) {
-      return;
-    }
-
-    player.contactReadyAt = this.time.now + 550;
-    boss.contactReadyAt = this.time.now + 550;
-    this.damagePlayer(player, 16);
+    this.applyMeleeContact(boss, player, 16, 550);
   }
 
   private damageEnemy(enemy: EnemyUnit, amount: number): void {
@@ -4508,7 +4669,16 @@ export class BattleScene extends Phaser.Scene {
   private flashSprite(sprite: Phaser.Physics.Arcade.Sprite): void {
     sprite.setTintFill(0xffffff);
     this.time.delayedCall(75, () => {
-      if (sprite.active) {
+      if (!sprite.active) {
+        return;
+      }
+
+      // Restore the identity tint (zombies, scouts, and raiders share the
+      // rifleman texture and are told apart by tint alone).
+      const baseTint = sprite.getData('baseTint') as number | undefined;
+      if (baseTint !== undefined) {
+        sprite.setTint(baseTint);
+      } else {
         sprite.clearTint();
       }
     });
@@ -4605,43 +4775,54 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private updateBullets(group: Phaser.Physics.Arcade.Group | undefined, time: number, delta: number): void {
+  private updateBullets(group: Phaser.Physics.Arcade.Group | undefined, time: number): void {
     if (!group) {
       return;
     }
 
     const travelBounds = this.getBulletTravelBounds();
-    for (const child of group.getChildren()) {
+    // Iterate a copy: impacts destroy bullets, which mutates the live list.
+    for (const child of [...group.getChildren()]) {
       const bullet = child as Phaser.Physics.Arcade.Image;
       if (!bullet.active) {
         continue;
       }
 
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
       const expiry = Number(bullet.getData('expiry') ?? 0);
-      const velocityX = Number(bullet.getData('velocityX') ?? 0);
-      const velocityY = Number(bullet.getData('velocityY') ?? 0);
+      const baseVelocityX = Number(bullet.getData('baseVelocityX') ?? 0);
+      const baseVelocityY = Number(bullet.getData('baseVelocityY') ?? 0);
       const originX = Number(bullet.getData('originX') ?? bullet.x);
       const originY = Number(bullet.getData('originY') ?? bullet.y);
       const baseMaxDistance = Number(bullet.getData('baseMaxDistance') ?? bullet.getData('maxDistance') ?? 700);
       let maxDistance = Number(bullet.getData('maxDistance') ?? baseMaxDistance);
       const dropStartDistance = Number(bullet.getData('dropStartDistance') ?? maxDistance * 0.78);
-      const seconds = Math.min(delta, 50) / 1000;
+
+      // Field effects shape the velocity (px/s); the engine integrates it on
+      // the fixed physics step, so flight paths are identical at any FPS.
       const zone = this.getBulletEffectZoneAt(bullet.x, bullet.y);
-      const zoneVelocity = this.applyBulletZoneVelocity(bullet, velocityX, velocityY, seconds, zone);
-      if (zone?.effect === 'boost') {
+      this.applyBulletZoneTint(bullet, zone);
+      let velocityX = baseVelocityX;
+      let velocityY = baseVelocityY;
+      if (zone?.effect === 'drag') {
+        velocityX = baseVelocityX * 0.56;
+        velocityY = baseVelocityY * 0.56 + 34;
+      } else if (zone?.effect === 'crosswind') {
+        const drift = Math.sin(time / 220) * 85;
+        velocityX = baseVelocityX - baseVelocityY * 0.08 + drift;
+        velocityY = baseVelocityY + baseVelocityX * 0.08;
+      } else if (zone?.effect === 'boost') {
+        velocityX = baseVelocityX * 1.18;
+        velocityY = baseVelocityY * 1.18;
         const boostedDistance = baseMaxDistance * 1.28;
-        maxDistance = Math.max(maxDistance, boostedDistance);
-        bullet.setData('maxDistance', maxDistance);
-        bullet.setData('dropStartDistance', maxDistance * Number(bullet.getData('baseDropStartRatio') ?? 0.78));
+        if (boostedDistance > maxDistance) {
+          maxDistance = boostedDistance;
+          bullet.setData('maxDistance', maxDistance);
+          bullet.setData('dropStartDistance', maxDistance * Number(bullet.getData('baseDropStartRatio') ?? 0.78));
+        }
       }
 
-      const nextX = bullet.x + zoneVelocity.x * seconds;
-      const nextY = bullet.y + zoneVelocity.y * seconds;
-
-      bullet.setPosition(nextX, nextY);
-      (bullet.body as Phaser.Physics.Arcade.Body).reset(nextX, nextY);
-
-      const traveled = Phaser.Math.Distance.Between(originX, originY, nextX, nextY);
+      const traveled = Phaser.Math.Distance.Between(originX, originY, bullet.x, bullet.y);
       if (traveled > dropStartDistance) {
         const dropProgress = Phaser.Math.Clamp(
           (traveled - dropStartDistance) / Math.max(1, maxDistance - dropStartDistance),
@@ -4653,13 +4834,10 @@ export class BattleScene extends Phaser.Scene {
           Number(bullet.getData('baseScaleX') ?? bullet.scaleX) * (1 - dropProgress * 0.45),
           Number(bullet.getData('baseScaleY') ?? bullet.scaleY) * (1 - dropProgress * 0.65),
         );
-        bullet.y += dropProgress * 0.9;
-        (bullet.body as Phaser.Physics.Arcade.Body).reset(bullet.x, bullet.y);
+        velocityY += dropProgress * 54;
       }
 
-      if (group === this.enemyBullets && this.tryHitVehicleWithEnemyBullet(bullet)) {
-        continue;
-      }
+      body.velocity.set(velocityX, velocityY);
 
       if (
         time > expiry
@@ -4671,23 +4849,22 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
-  private tryHitVehicleWithEnemyBullet(bullet: Phaser.Physics.Arcade.Image): boolean {
-    const bulletBounds = bullet.getBounds();
-    for (const vehicle of this.vehicles) {
-      if (!vehicle.active || !vehicle.driver || !(vehicle.body.body as Phaser.Physics.Arcade.Body | undefined)?.enable) {
-        continue;
-      }
-
-      if (!Phaser.Geom.Rectangle.Overlaps(bulletBounds, vehicle.body.getBounds())) {
-        continue;
-      }
-
-      this.damageVehicle(vehicle, 1);
-      this.dropBullet(bullet);
-      return true;
+  private applyBulletZoneTint(bullet: Phaser.Physics.Arcade.Image, zone: BulletEffectZone | undefined): void {
+    const effect = zone?.effect ?? 'none';
+    if (bullet.getData('appliedZoneTint') === effect) {
+      return;
     }
 
-    return false;
+    bullet.setData('appliedZoneTint', effect);
+    if (effect === 'drag') {
+      bullet.setTint(0x93c9ff);
+    } else if (effect === 'crosswind') {
+      bullet.setTint(0x9ff5b5);
+    } else if (effect === 'boost') {
+      bullet.setTint(0xfff0a6);
+    } else {
+      bullet.setTint(Number(bullet.getData('baseTint') ?? 0xffffff));
+    }
   }
 
   private getBulletTravelBounds(): Phaser.Geom.Rectangle {
@@ -4702,43 +4879,13 @@ export class BattleScene extends Phaser.Scene {
     return this.terrainZones.find((zone) => zone.bounds.contains(x, y));
   }
 
-  private applyBulletZoneVelocity(
+  private resolvePlayerBulletImpact(
     bullet: Phaser.Physics.Arcade.Image,
-    velocityX: number,
-    velocityY: number,
-    seconds: number,
-    zone: BulletEffectZone | undefined,
-  ): { x: number; y: number } {
-    if (!zone) {
-      bullet.setTint(Number(bullet.getData('baseTint') ?? 0xffffff));
-      return { x: velocityX, y: velocityY };
-    }
-
-    if (zone.effect === 'drag') {
-      bullet.setTint(0x93c9ff);
-      return {
-        x: velocityX * 0.56,
-        y: velocityY * 0.56 + 34,
-      };
-    }
-
-    if (zone.effect === 'crosswind') {
-      const drift = Math.sin(this.time.now / 220) * 85;
-      bullet.setTint(0x9ff5b5);
-      return {
-        x: velocityX + -velocityY * 0.08 + drift * seconds * 8,
-        y: velocityY + velocityX * 0.08,
-      };
-    }
-
-    bullet.setTint(0xfff0a6);
-    return {
-      x: velocityX * 1.18,
-      y: velocityY * 1.18,
-    };
-  }
-
-  private resolvePlayerBulletImpact(bullet: Phaser.Physics.Arcade.Image, x: number, y: number): void {
+    x: number,
+    y: number,
+    excludeEnemy?: EnemyUnit,
+    excludeBoss?: BossUnit,
+  ): void {
     if (!bullet.active) {
       return;
     }
@@ -4747,7 +4894,7 @@ export class BattleScene extends Phaser.Scene {
     const splashDamage = Number(bullet.getData('splashDamage') ?? 0);
     const splashTint = Number(bullet.getData('splashTint') ?? 0xfff0aa);
     if (splashRadius > 0 && splashDamage > 0) {
-      this.createExplosion(x, y, splashRadius, splashDamage, splashTint);
+      this.createExplosion(x, y, splashRadius, splashDamage, splashTint, excludeEnemy, excludeBoss);
     }
 
     const poisonRadius = Number(bullet.getData('poisonRadius') ?? 0);
@@ -4759,7 +4906,15 @@ export class BattleScene extends Phaser.Scene {
     this.dropBullet(bullet);
   }
 
-  private createExplosion(x: number, y: number, radius: number, damage: number, tint: number): void {
+  private createExplosion(
+    x: number,
+    y: number,
+    radius: number,
+    damage: number,
+    tint: number,
+    excludeEnemy?: EnemyUnit,
+    excludeBoss?: BossUnit,
+  ): void {
     const blast = this.add.image(x, y, 'blast-circle');
     blast.setTint(tint);
     blast.setAlpha(0.48);
@@ -4777,7 +4932,7 @@ export class BattleScene extends Phaser.Scene {
     });
 
     for (const enemy of this.enemies) {
-      if (!enemy.alive) {
+      if (!enemy.alive || enemy === excludeEnemy) {
         continue;
       }
 
@@ -4790,7 +4945,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     for (const boss of this.bosses) {
-      if (!boss.alive) {
+      if (!boss.alive || boss === excludeBoss) {
         continue;
       }
 

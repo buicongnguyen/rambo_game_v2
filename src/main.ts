@@ -66,6 +66,9 @@ new Phaser.Game({
     default: 'arcade',
     arcade: {
       gravity: { x: 0, y: 0 },
+      // 120Hz fixed physics step halves per-step bullet travel so fast
+      // rounds (sniper ~1000px/s boosted) cannot tunnel through thin cover.
+      fps: 120,
       debug: false,
     },
   },
