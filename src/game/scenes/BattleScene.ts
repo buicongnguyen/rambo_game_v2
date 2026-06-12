@@ -501,6 +501,12 @@ export class BattleScene extends Phaser.Scene {
   private objectivePanel?: Phaser.GameObjects.Image;
   private visionGraphics?: Phaser.GameObjects.Graphics;
   private shadowSquadMode = false;
+  private parallaxLayers: Array<{ sprite: Phaser.GameObjects.TileSprite; factor: number }> = [];
+  private floatingTexts: Phaser.GameObjects.Text[] = [];
+  private standbyTitle?: Phaser.GameObjects.Text;
+  private standbyBriefing?: Phaser.GameObjects.Text;
+  private standbySoldier?: Phaser.GameObjects.Sprite;
+  private standbyBoss?: Phaser.GameObjects.Sprite;
 
   constructor(
     director: GameDirector,
@@ -554,6 +560,7 @@ export class BattleScene extends Phaser.Scene {
     this.drawEnemyVisionCones(time);
     this.updateBoss(time);
     this.updateCameraAnchor(delta);
+    this.updateParallax();
     this.keepActorsInsideVisiblePlayfield();
     this.checkEncounterTriggers();
     this.updateBullets(this.playerBullets, time);
@@ -644,32 +651,62 @@ export class BattleScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, previewStage.worldWidth, previewStage.worldHeight);
     this.applyResponsiveCamera();
     this.drawBackdrop(previewStage, true);
-    this.bannerText = this.add.text(64, 72, previewStage.codename, {
+
+    // The standby screen keeps its own text objects so gameplay banner
+    // re-layouts (triggered by window resizes) can never hijack them.
+    this.standbyTitle = this.add.text(0, 0, previewStage.codename, {
       fontFamily: 'Impact, Haettenschweiler, sans-serif',
       fontSize: '30px',
       color: '#f3e6bf',
       letterSpacing: 2,
     }).setScrollFactor(0).setDepth(30);
 
-    this.reticleText = this.add.text(64, 112, previewStage.briefing, {
+    this.standbyBriefing = this.add.text(0, 0, previewStage.briefing, {
       fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
       fontSize: '16px',
       color: '#d6d9cb',
       wordWrap: { width: 440 },
     }).setScrollFactor(0).setDepth(30);
 
-    const previewSprite = this.add.sprite(250, previewStage.worldHeight * 0.58, 'player-run', 0);
-    previewSprite.setScale(1.2);
-    previewSprite.play(animationKey('player-run'));
-    previewSprite.setRotation(0.08);
-    previewSprite.setDepth(10);
+    this.standbySoldier = this.add.sprite(0, 0, 'player-run', 0);
+    this.standbySoldier.setScale(1.2);
+    this.standbySoldier.play(animationKey('player-run'));
+    this.standbySoldier.setRotation(0.08);
+    this.standbySoldier.setDepth(10);
 
-    const previewBoss = this.add.sprite(520, previewStage.worldHeight * 0.4, getBossTextureKey(previewStage.boss.kind), 0);
-    previewBoss.setDepth(10);
-    previewBoss.setFrame(0);
-    previewBoss.setScale(0.92);
+    this.standbyBoss = this.add.sprite(0, 0, getBossTextureKey(previewStage.boss.kind), 0);
+    this.standbyBoss.setDepth(10);
+    this.standbyBoss.setFrame(0);
+    this.standbyBoss.setScale(0.92);
 
+    this.layoutStandby();
     this.emitHud('standby');
+  }
+
+  /** Lays out menu text and preview actors inside the actually-visible view. */
+  private layoutStandby(): void {
+    if (!this.standbyTitle?.active || !this.standbyBriefing?.active) {
+      return;
+    }
+
+    const zoom = Math.max(0.1, this.cameras.main.zoom);
+    const centerX = this.scale.width * 0.5;
+    const centerY = this.scale.height * 0.5;
+    const toViewX = (x: number): number => centerX + (x - centerX) / zoom;
+    const toViewY = (y: number): number => centerY + (y - centerY) / zoom;
+
+    this.standbyTitle.setPosition(toViewX(48), toViewY(56));
+    this.standbyTitle.setScale(1 / zoom);
+    this.standbyBriefing.setPosition(toViewX(48), toViewY(102));
+    this.standbyBriefing.setScale(1 / zoom);
+    this.standbyBriefing.setWordWrapWidth(Math.min(440, Math.max(220, this.scale.width - 96)));
+
+    // Camera scroll is (0,0) on standby, so the visible world rect starts at
+    // the origin and spans viewport/zoom.
+    const visibleWidth = Math.max(1, this.scale.width) / zoom;
+    const visibleHeight = Math.max(1, this.scale.height) / zoom;
+    this.standbySoldier?.setPosition(visibleWidth * 0.24, visibleHeight * 0.62);
+    this.standbyBoss?.setPosition(visibleWidth * 0.52, visibleHeight * 0.46);
   }
 
   private setupStage(snapshot: SessionSnapshot): void {
@@ -702,6 +739,12 @@ export class BattleScene extends Phaser.Scene {
     this.reticleText = undefined;
     this.objectivePanel = undefined;
     this.visionGraphics = undefined;
+    this.standbyTitle = undefined;
+    this.standbyBriefing = undefined;
+    this.standbySoldier = undefined;
+    this.standbyBoss = undefined;
+    this.parallaxLayers = [];
+    this.floatingTexts = [];
     this.physics.resume();
     this.physics.world.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
     this.cameras.main.setBounds(0, 0, this.stage.worldWidth, this.stage.worldHeight);
@@ -727,7 +770,9 @@ export class BattleScene extends Phaser.Scene {
     this.bulletZones = [];
     this.terrainZones = [];
     this.cameraTarget = this.add.zone(140, this.stage.worldHeight * 0.5, 4, 4);
-    this.cameras.main.startFollow(this.cameraTarget, true, 0.08, 0.08);
+    // roundPixels off: integer-snapping the scroll at fractional zoom causes
+    // visible follow jitter (phaser#6509) and buys nothing with antialiasing.
+    this.cameras.main.startFollow(this.cameraTarget, false, 0.08, 0.08);
     this.cameras.main.setDeadzone(140, 120);
 
     this.createTerrainZones(this.stage);
@@ -753,38 +798,131 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawBackdrop(stage: StageConfig, standby: boolean): void {
+    // The backdrop covers exactly the world; the camera zoom floor
+    // (getMinimumPlayableZoom) guarantees the view never exceeds it, so no
+    // viewport-dependent sizing or resize repaints are needed.
     const background = this.add.graphics();
-    const drawHeight = Math.max(stage.worldHeight, this.getVisibleWorldHeight());
     background.setDepth(-40);
     background.fillStyle(stage.palette.ground, 1);
-    background.fillRect(0, 0, stage.worldWidth, drawHeight);
+    background.fillRect(0, 0, stage.worldWidth, stage.worldHeight);
 
+    // Decoration density follows the stage dimensions so wide late-game
+    // worlds don't run out of detail before the boss arena.
     background.fillStyle(stage.palette.shadow, 0.26);
-    for (let index = 0; index < 20; index += 1) {
+    const ellipseCount = Math.ceil((stage.worldWidth - 160) / 135);
+    for (let index = 0; index < ellipseCount; index += 1) {
       const width = 90 + (index % 4) * 50;
       const height = 90 + (index % 5) * 24;
       const x = 100 + index * 135;
-      const y = 100 + (index % 6) * 120;
+      const y = 80 + ((index * 97) % Math.max(1, stage.worldHeight - 190));
       background.fillEllipse(x, y, width, height);
     }
 
     background.fillStyle(stage.palette.accent, 0.08);
-    for (let index = 0; index < 18; index += 1) {
-      background.fillRect(index * 170, 0, 8, drawHeight);
+    for (let x = 0; x < stage.worldWidth; x += 170) {
+      background.fillRect(x, 0, 8, stage.worldHeight);
     }
 
     if (stage.palette.water) {
       background.fillStyle(stage.palette.water, 0.82);
-      background.fillRect(stage.worldWidth * 0.33, 0, stage.worldWidth * 0.16, drawHeight);
+      background.fillRect(stage.worldWidth * 0.33, 0, stage.worldWidth * 0.16, stage.worldHeight);
       background.fillStyle(0xffffff, 0.06);
-      for (let index = 0; index < 18; index += 1) {
-        background.fillRect(stage.worldWidth * 0.33, 40 + index * 52, stage.worldWidth * 0.16, 14);
+      for (let y = 40; y < stage.worldHeight - 24; y += 52) {
+        background.fillRect(stage.worldWidth * 0.33, y, stage.worldWidth * 0.16, 14);
       }
     }
 
     if (standby) {
       background.fillStyle(0x000000, 0.18);
-      background.fillRect(0, 0, stage.worldWidth, drawHeight);
+      background.fillRect(0, 0, stage.worldWidth, stage.worldHeight);
+    } else {
+      this.createParallaxLayers(stage);
+    }
+  }
+
+  /**
+   * Two world-anchored tile layers whose texture content is scrolled against
+   * the camera, giving depth without any viewport-dependent sizing (the
+   * scrollFactor approach is device-dependent — phaser#6128).
+   */
+  private createParallaxLayers(stage: StageConfig): void {
+    this.parallaxLayers = [];
+    this.ensureParallaxTextures(stage);
+
+    const far = this.add.tileSprite(
+      stage.worldWidth * 0.5,
+      stage.worldHeight * 0.5,
+      stage.worldWidth,
+      stage.worldHeight,
+      `parallax-far-${stage.theme}`,
+    );
+    far.setDepth(-38);
+    far.setAlpha(0.5);
+    this.parallaxLayers.push({ sprite: far, factor: 0.72 });
+
+    const near = this.add.tileSprite(
+      stage.worldWidth * 0.5,
+      stage.worldHeight * 0.5,
+      stage.worldWidth,
+      stage.worldHeight,
+      `parallax-near-${stage.theme}`,
+    );
+    near.setDepth(-36);
+    near.setAlpha(0.42);
+    this.parallaxLayers.push({ sprite: near, factor: 0.4 });
+  }
+
+  private ensureParallaxTextures(stage: StageConfig): void {
+    const toCss = (tint: number, alpha: number): string => {
+      const r = (tint >> 16) & 0xff;
+      const g = (tint >> 8) & 0xff;
+      const b = tint & 0xff;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    };
+
+    const farKey = `parallax-far-${stage.theme}`;
+    if (!this.textures.exists(farKey)) {
+      const size = 256;
+      const texture = this.textures.createCanvas(farKey, size, size);
+      if (texture) {
+        const ctx = texture.getContext();
+        for (let index = 0; index < 9; index += 1) {
+          const x = (index * 83 + 31) % size;
+          const y = (index * 57 + 19) % size;
+          const radius = 26 + (index % 4) * 14;
+          const gradient = ctx.createRadialGradient(x, y, 4, x, y, radius);
+          gradient.addColorStop(0, toCss(stage.palette.shadow, 0.5));
+          gradient.addColorStop(1, toCss(stage.palette.shadow, 0));
+          ctx.fillStyle = gradient;
+          ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+        }
+        texture.refresh();
+      }
+    }
+
+    const nearKey = `parallax-near-${stage.theme}`;
+    if (!this.textures.exists(nearKey)) {
+      const size = 192;
+      const texture = this.textures.createCanvas(nearKey, size, size);
+      if (texture) {
+        const ctx = texture.getContext();
+        ctx.fillStyle = toCss(stage.palette.accent, 0.2);
+        for (let index = 0; index < 26; index += 1) {
+          const x = (index * 67 + 11) % size;
+          const y = (index * 41 + 29) % size;
+          const tall = index % 3 === 0;
+          ctx.fillRect(x, y, tall ? 2 : 5, tall ? 9 : 2);
+        }
+        texture.refresh();
+      }
+    }
+  }
+
+  private updateParallax(): void {
+    const camera = this.cameras.main;
+    for (const layer of this.parallaxLayers) {
+      layer.sprite.tilePositionX = camera.scrollX * layer.factor;
+      layer.sprite.tilePositionY = camera.scrollY * layer.factor * 0.4;
     }
   }
 
@@ -2057,8 +2195,16 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    // scrollFactor(0) skips camera scroll but NOT zoom: overlay objects are
+    // scaled around the view center. Counter-scale by 1/zoom so the plaque
+    // holds its pixel size while the high-ground effect breathes the camera.
+    const zoom = Math.max(0.1, this.cameras.main.zoom);
+    const centerX = this.scale.width * 0.5;
+    const centerY = this.scale.height * 0.5;
+    const toViewY = (y: number): number => centerY + (y - centerY) / zoom;
+
     const compact = this.scale.width <= 900;
-    const x = this.scale.width * 0.5;
+    const x = centerX;
     const panelY = compact ? 116 : 100;
     const bannerY = compact ? panelY - 26 : panelY - 30;
     const reticleY = compact ? panelY + 22 : panelY + 24;
@@ -2066,18 +2212,18 @@ export class BattleScene extends Phaser.Scene {
       ? Math.max(240, Math.min(this.scale.width - 28, 560))
       : 620;
 
-    this.objectivePanel?.setPosition(x, panelY);
+    this.objectivePanel?.setPosition(x, toViewY(panelY));
     if (this.objectivePanel) {
-      this.objectivePanel.displayWidth = Math.min(this.scale.width - 28, compact ? 560 : 720);
-      this.objectivePanel.displayHeight = compact ? 118 : 132;
+      this.objectivePanel.displayWidth = Math.min(this.scale.width - 28, compact ? 560 : 720) / zoom;
+      this.objectivePanel.displayHeight = (compact ? 118 : 132) / zoom;
     }
 
-    this.bannerText.setPosition(x, bannerY);
-    this.bannerText.setScale(compact ? 0.7 : 1);
+    this.bannerText.setPosition(x, toViewY(bannerY));
+    this.bannerText.setScale((compact ? 0.7 : 1) / zoom);
     this.bannerText.setWordWrapWidth(wrapWidth);
 
-    this.reticleText.setPosition(x, reticleY);
-    this.reticleText.setScale(compact ? 0.84 : 1);
+    this.reticleText.setPosition(x, toViewY(reticleY));
+    this.reticleText.setScale((compact ? 0.84 : 1) / zoom);
     this.reticleText.setWordWrapWidth(wrapWidth);
   }
 
@@ -2104,10 +2250,7 @@ export class BattleScene extends Phaser.Scene {
       stage.worldHeight,
     );
     this.layoutOverlayText();
-  }
-
-  private getVisibleWorldHeight(zoom = this.cameras.main.zoom): number {
-    return Math.max(1, this.scale.height) / Math.max(0.1, zoom);
+    this.layoutStandby();
   }
 
   private updatePlayers(time: number): void {
@@ -5037,23 +5180,47 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    const text = this.add.text(x, y - 18, label, {
-      fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
-      fontSize: '12px',
-      color: '#fff2c4',
-      stroke: '#24170a',
-      strokeThickness: 3,
-    });
-    text.setOrigin(0.5);
-    text.setDepth(20);
+    this.spawnFloatingLabel(x, y, label);
+  }
 
+  /**
+   * Damage numbers come from a small pool. Each Phaser Text owns a canvas
+   * and a GPU texture, so allocating one per machine-gun pellet (~35/s) was
+   * a measurable hitch source in v1.
+   */
+  private spawnFloatingLabel(x: number, y: number, label: string): void {
+    let text = this.floatingTexts.find((entry) => entry.active && !entry.visible);
+    if (!text) {
+      if (this.floatingTexts.length >= 28) {
+        return;
+      }
+
+      text = this.add.text(0, 0, '', {
+        fontFamily: 'Bahnschrift, Trebuchet MS, sans-serif',
+        fontSize: '12px',
+        color: '#fff2c4',
+        stroke: '#24170a',
+        strokeThickness: 3,
+      });
+      text.setOrigin(0.5);
+      text.setDepth(20);
+      this.floatingTexts.push(text);
+    }
+
+    text.setText(label);
+    text.setPosition(x, y - 18);
+    text.setAlpha(1);
+    text.setVisible(true);
+    this.tweens.killTweensOf(text);
     this.tweens.add({
       targets: text,
       y: y - 38,
       alpha: 0,
       duration: 360,
       ease: 'Quad.easeOut',
-      onComplete: () => text.destroy(),
+      onComplete: () => {
+        text.setVisible(false);
+      },
     });
   }
 
