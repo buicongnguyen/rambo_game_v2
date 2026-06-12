@@ -821,6 +821,13 @@ a {
     background 140ms ease;
 }
 
+/* Rapid taps on menu/HUD buttons must not trigger iOS double-tap zoom. */
+.action-button,
+.difficulty-button,
+.skip-stage-button {
+  touch-action: manipulation;
+}
+
 .action-button:hover,
 .action-button:focus-visible {
   transform: translateY(-1px);

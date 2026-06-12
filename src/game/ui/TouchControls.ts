@@ -72,6 +72,9 @@ export class TouchControlsOverlay {
     this.bindStick();
     this.bindButtons();
     window.addEventListener('resize', this.syncVisibility);
+    // Re-evaluate when the input modality itself changes (mouse plugged in,
+    // touchscreen attached) — a resize won't necessarily fire then.
+    this.touchQuery.addEventListener('change', this.syncVisibility);
     this.syncVisibility();
 
     director.subscribe((snapshot) => {
@@ -114,6 +117,12 @@ export class TouchControlsOverlay {
   private bindStick(): void {
     this.stickZone.addEventListener('pointerdown', (event) => {
       event.preventDefault();
+      // First finger owns the stick; a second touch landing in the zone must
+      // not steal it and snap the knob.
+      if (this.stickPointerId !== null) {
+        return;
+      }
+
       this.stickPointerId = event.pointerId;
       this.stickZone.dataset.engaged = 'true';
       this.stickZone.setPointerCapture(event.pointerId);

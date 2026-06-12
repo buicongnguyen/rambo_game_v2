@@ -21,6 +21,7 @@ export class InterfaceController {
   private hudSnapshot: HudSnapshot | null = null;
   private sessionSnapshot: SessionSnapshot;
   private lastHudSignature = '';
+  private hudStructureSignature = '';
   private selectedDifficulty: DifficultyMode = 'normal';
 
   constructor(roots: InterfaceRoots, director: GameDirector, options: InterfaceOptions = {}) {
@@ -54,6 +55,7 @@ export class InterfaceController {
     const fallbackStage = this.getPreviewStage(this.sessionSnapshot);
     const hud = this.hudSnapshot ?? {
       phase: 'standby' as const,
+      stageOutcome: 'active' as const,
       stageName: fallbackStage.codename,
       stageIndex: this.sessionSnapshot.currentStageIndex + 1,
       totalStages: this.sessionSnapshot.stages.length,
@@ -72,6 +74,38 @@ export class InterfaceController {
     };
 
     this.hudRoot.dataset.phase = hud.phase;
+
+    // Once an outcome is latched, skipping would void the pending stage
+    // completion — hide the button for the hand-off window.
+    const showSkip = this.sessionSnapshot.phase === 'playing' && hud.stageOutcome === 'active';
+
+    // Rebuild the DOM only when the structure changes (stage, roster, weapon
+    // set, boss presence). Combat ticks just patch text and meter widths —
+    // v1 rebuilt the whole HUD up to ~8x/s, eating Skip taps mid-press.
+    const structureSignature = JSON.stringify({
+      stage: hud.stageName,
+      index: hud.stageIndex,
+      total: hud.totalStages,
+      objective: hud.objective,
+      players: hud.players.map((player) => ({
+        id: player.id,
+        label: player.label,
+        accent: player.accent,
+        weapons: (player.ammo ?? []).map((weapon) => weapon.label),
+      })),
+      boss: hud.boss?.name ?? '',
+      showSkip,
+    });
+
+    if (structureSignature !== this.hudStructureSignature) {
+      this.hudStructureSignature = structureSignature;
+      this.buildHudDom(hud, showSkip);
+    }
+
+    this.patchHudValues(hud);
+  }
+
+  private buildHudDom(hud: HudSnapshot, showSkip: boolean): void {
     this.hudRoot.innerHTML = `
       <div class="hud-block hud-left">
         <div class="mission-chip">
@@ -81,23 +115,21 @@ export class InterfaceController {
         </div>
         <div class="player-stack">
           ${hud.players.map((player) => `
-            <article class="player-card ${player.alive ? '' : 'is-down'}" style="--accent:${player.accent}">
+            <article class="player-card" data-player-id="${player.id}" style="--accent:${player.accent}">
               <div class="player-head">
                 <strong>${player.label}</strong>
-                <span>${player.alive ? 'Active' : 'Down'}</span>
+                <span data-field="status"></span>
               </div>
               <div class="meter">
-                <span style="width:${Math.max(0, (player.health / player.maxHealth) * 100)}%"></span>
+                <span data-field="health-bar"></span>
               </div>
               <div class="player-meta">
-                <span>HP ${Math.max(0, Math.ceil(player.health))}/${player.maxHealth}</span>
-                <span>Air Strike x${player.bombs}</span>
+                <span data-field="hp"></span>
+                <span data-field="bombs"></span>
               </div>
               <div class="ammo-strip" aria-label="${player.label} ammo">
-                ${(player.ammo ?? []).map((weapon) => `
-                  <span class="ammo-pill ${weapon.active ? 'is-active' : ''}">
-                    ${weapon.label} ${weapon.ammo}
-                  </span>
+                ${(player.ammo ?? []).map((_, index) => `
+                  <span class="ammo-pill" data-ammo-index="${index}"></span>
                 `).join('')}
               </div>
             </article>
@@ -106,10 +138,10 @@ export class InterfaceController {
       </div>
       <div class="hud-block hud-right">
         <div class="status-chip">
-          <span>Stage ${hud.stageIndex}/${hud.totalStages}</span>
-          <strong>${hud.progressText} - Enemies ${hud.enemyCount.alive}/${hud.enemyCount.total}</strong>
+          <span data-field="stage-counter"></span>
+          <strong data-field="progress"></strong>
           <span>Enemies left in stage</span>
-          <span>${hud.encounterLabel}</span>
+          <span data-field="encounter"></span>
         </div>
         ${hud.boss ? `
           <div class="boss-chip">
@@ -118,18 +150,18 @@ export class InterfaceController {
               <strong>${hud.boss.name}</strong>
             </div>
             <div class="meter boss-meter">
-              <span style="width:${Math.max(0, (hud.boss.health / hud.boss.maxHealth) * 100)}%"></span>
+              <span data-field="boss-bar"></span>
             </div>
           </div>
         ` : ''}
-        ${this.sessionSnapshot.phase === 'playing' ? `
+        ${showSkip ? `
           <button type="button" class="skip-stage-button" data-skip-stage>
             Skip Stage ${hud.stageIndex}
           </button>
         ` : ''}
         <div class="score-chip">
           <span>Total Score</span>
-          <strong>${hud.totalScore.toLocaleString()}</strong>
+          <strong data-field="score"></strong>
         </div>
       </div>
     `;
@@ -139,6 +171,61 @@ export class InterfaceController {
       this.startMusic?.();
       this.director.skipToNextStage();
     });
+  }
+
+  private patchHudValues(hud: HudSnapshot): void {
+    const setText = (selector: string, value: string): void => {
+      const element = this.hudRoot.querySelector<HTMLElement>(selector);
+      if (element && element.textContent !== value) {
+        element.textContent = value;
+      }
+    };
+
+    for (const player of hud.players) {
+      const card = this.hudRoot.querySelector<HTMLElement>(`article[data-player-id="${player.id}"]`);
+      if (!card) {
+        continue;
+      }
+
+      card.classList.toggle('is-down', !player.alive);
+      const status = card.querySelector<HTMLElement>('[data-field="status"]');
+      if (status) {
+        status.textContent = player.alive ? 'Active' : 'Down';
+      }
+      const healthBar = card.querySelector<HTMLElement>('[data-field="health-bar"]');
+      if (healthBar) {
+        healthBar.style.width = `${Math.max(0, (player.health / player.maxHealth) * 100)}%`;
+      }
+      const hp = card.querySelector<HTMLElement>('[data-field="hp"]');
+      if (hp) {
+        hp.textContent = `HP ${Math.max(0, Math.ceil(player.health))}/${player.maxHealth}`;
+      }
+      const bombs = card.querySelector<HTMLElement>('[data-field="bombs"]');
+      if (bombs) {
+        bombs.textContent = `Air Strike x${player.bombs}`;
+      }
+      (player.ammo ?? []).forEach((weapon, index) => {
+        const pill = card.querySelector<HTMLElement>(`[data-ammo-index="${index}"]`);
+        if (pill) {
+          pill.classList.toggle('is-active', weapon.active);
+          const label = `${weapon.label} ${weapon.ammo}`;
+          if (pill.textContent !== label) {
+            pill.textContent = label;
+          }
+        }
+      });
+    }
+
+    setText('[data-field="stage-counter"]', `Stage ${hud.stageIndex}/${hud.totalStages}`);
+    setText('[data-field="progress"]', `${hud.progressText} - Enemies ${hud.enemyCount.alive}/${hud.enemyCount.total}`);
+    setText('[data-field="encounter"]', hud.encounterLabel);
+    setText('[data-field="score"]', hud.totalScore.toLocaleString());
+    if (hud.boss) {
+      const bossBar = this.hudRoot.querySelector<HTMLElement>('[data-field="boss-bar"]');
+      if (bossBar) {
+        bossBar.style.width = `${Math.max(0, (hud.boss.health / hud.boss.maxHealth) * 100)}%`;
+      }
+    }
   }
 
   private renderOverlay(): void {
@@ -216,7 +303,7 @@ export class InterfaceController {
         <h3>Local Squad Inputs</h3>
         <ul>
           <li><strong>${CONTROL_SCHEMES[1].callsign}</strong> ${describeControls(CONTROL_SCHEMES[1])}</li>
-          <li><strong>${CONTROL_SCHEMES[2].callsign}</strong> ${describeControls(CONTROL_SCHEMES[2])}</li>
+          <li><strong>Shadow Squad</strong> The squad mode fields AI teammates: free captured soldiers from RESCUE bunkers and they follow, ride along, and fight beside you.</li>
           <li><strong>Mobile</strong> Drag the left stick to move, then use the right buttons to fire, jump/roll, change gun, and call an air-strike bomb.</li>
           <li><strong>Air Strike</strong> The old Barrage button is the emergency bomb: it damages enemies in a wide circle and restocks after clearing zones.</li>
         </ul>

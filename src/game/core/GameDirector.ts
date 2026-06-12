@@ -71,6 +71,10 @@ export class GameDirector {
   }
 
   skipToNextStage(): void {
+    if (this.phase !== 'playing') {
+      return;
+    }
+
     if (this.currentStageIndex >= this.stages.length - 1) {
       this.currentStageIndex = 0;
     } else {
@@ -88,6 +92,12 @@ export class GameDirector {
   }
 
   completeCurrentStage(): void {
+    // Outcome transitions are only valid mid-run; a stale delayed call from a
+    // finished stage must not overwrite a newer phase.
+    if (this.phase !== 'playing') {
+      return;
+    }
+
     this.completedStages = Math.min(this.completedStages + 1, this.stages.length);
 
     if (this.currentStageIndex >= this.stages.length - 1) {
@@ -101,6 +111,10 @@ export class GameDirector {
   }
 
   failMission(): void {
+    if (this.phase !== 'playing') {
+      return;
+    }
+
     this.phase = 'gameover';
     this.emit();
   }

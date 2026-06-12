@@ -341,6 +341,10 @@ const DIFFICULTY_HEALTH: Record<DifficultyMode, number> = {
   extreme: 100,
 };
 
+const MAX_BOMBS = 12;
+
+type StageOutcome = 'active' | 'cleared' | 'failed';
+
 interface PlayerUnit {
   id: 1 | 2;
   label: string;
@@ -466,11 +470,14 @@ export class BattleScene extends Phaser.Scene {
   private bosses: BossUnit[] = [];
   private boss?: BossUnit;
   private encounterStates: EncounterState[] = [];
-  private encounterCount = 0;
   private activeEncounterLabel = 'Stand by for deployment';
   private allEncountersCleared = false;
   private bossSpawned = false;
   private playing = false;
+  // One-way latch: the first decided ending wins. Every damage source checks
+  // it, so a lingering poison tick can never flip a failure into a victory.
+  private stageOutcome: StageOutcome = 'active';
+  private summonCounter = 0;
   private hudTimestamp = 0;
   private playerGroup?: Phaser.Physics.Arcade.Group;
   private allyGroup?: Phaser.Physics.Arcade.Group;
@@ -727,10 +734,11 @@ export class BattleScene extends Phaser.Scene {
       cleared: false,
       remaining: 0,
     }));
-    this.encounterCount = 0;
     this.activeEncounterLabel = 'Advance to the next kill zone';
     this.allEncountersCleared = false;
     this.bossSpawned = false;
+    this.stageOutcome = 'active';
+    this.summonCounter = 0;
     this.hudTimestamp = 0;
     this.nextVisionConeDrawAt = 0;
     this.spawnDoors.clear();
@@ -1642,12 +1650,11 @@ export class BattleScene extends Phaser.Scene {
     body.setDepth(8);
     body.setStrokeStyle(3, 0x9ed8ff, 0.46);
     body.setData('rescueBunkerId', id);
-    body.setData('destructibleObstacle', true);
-    body.setData('coverHp', 120);
-    body.setData('coverLabel', 'RESCUE');
+    // Deliberately NOT a solid obstacle: a solid collider would separate the
+    // player to exact-touching every step and the rescue overlap below it
+    // could never fire — v1's whole rescue mechanic was dead because of this.
     this.physics.add.existing(body, true);
     this.rescueBunkerGroup?.add(body);
-    this.obstacleBodies.push(body);
 
     const roof = this.add.rectangle(x, y - 21, 86, 10, 0x263034, 0.92).setDepth(9);
     const door = this.add.rectangle(x - 23, y + 6, 18, 28, 0x10181a, 0.92).setDepth(9);
@@ -2094,6 +2101,19 @@ export class BattleScene extends Phaser.Scene {
     this.physics.add.overlap(this.playerGroup!, this.vehicleGroup!, (player, vehicle) => {
       this.handleVehicleEntry(player as Phaser.GameObjects.GameObject, vehicle as Phaser.GameObjects.GameObject);
     });
+    // The rider body is dormant while driving, so vehicles collect pickups
+    // on the driver's behalf.
+    const grantToDriver = (
+      grant: (player: PlayerUnit, pickup: Phaser.GameObjects.GameObject) => void,
+    ) => (vehicleObject: unknown, pickup: unknown) => {
+      const vehicle = (vehicleObject as Phaser.GameObjects.GameObject).getData('vehicle') as VehicleUnit | undefined;
+      if (vehicle?.active && vehicle.driver) {
+        grant(vehicle.driver, pickup as Phaser.GameObjects.GameObject);
+      }
+    };
+    this.physics.add.overlap(this.vehicleGroup!, this.weaponPickups!, grantToDriver((player, pickup) => this.grantWeaponPickup(player, pickup)));
+    this.physics.add.overlap(this.vehicleGroup!, this.healthPickups!, grantToDriver((player, pickup) => this.grantHealthPickup(player, pickup)));
+    this.physics.add.overlap(this.vehicleGroup!, this.airStrikePickups!, grantToDriver((player, pickup) => this.grantAirStrikePickup(player, pickup)));
     this.physics.add.overlap(this.playerGroup!, this.rescueBunkerGroup!, (player, bunker) => {
       this.handleRescueBunker(player as Phaser.GameObjects.GameObject, bunker as Phaser.GameObjects.GameObject);
     });
@@ -2432,7 +2452,7 @@ export class BattleScene extends Phaser.Scene {
     };
 
     for (const enemy of this.enemies) {
-      if (enemy.alive) {
+      if (enemy.alive && (enemy.sprite.body as Phaser.Physics.Arcade.Body).enable) {
         consider(enemy.sprite.x, enemy.sprite.y);
       }
     }
@@ -3221,11 +3241,10 @@ export class BattleScene extends Phaser.Scene {
       }
 
       state.cleared = true;
-      this.encounterCount += 1;
       this.activeEncounterLabel = `${state.config.label} secure`;
       for (const player of this.players) {
         if (player.alive) {
-          player.bombs = Math.min(player.bombs + 1, 5);
+          player.bombs = Math.min(player.bombs + 1, MAX_BOMBS);
         }
       }
       this.showBanner('Zone clear. Air Strike restocked.', '#f1d486');
@@ -3250,11 +3269,16 @@ export class BattleScene extends Phaser.Scene {
     state.config.enemies.forEach((spawn, index) => {
       const door = this.spawnDoors.get(spawn.id);
       this.time.delayedCall(index * 360, () => {
-        this.spawnEnemy(spawn.kind, spawn.id, door?.x ?? spawn.x, door?.y ?? spawn.y, state.config.id, spawn.x, spawn.y);
+        // A dropped spawn (stage already ending) must still be deducted from
+        // the encounter roster, or the zone could never report cleared.
+        const spawned = this.spawnEnemy(spawn.kind, spawn.id, door?.x ?? spawn.x, door?.y ?? spawn.y, state.config.id, spawn.x, spawn.y);
+        if (!spawned) {
+          state.remaining = Math.max(0, state.remaining - 1);
+        }
         if (spawn.kind === 'zombie') {
           const duplicateOffset = index % 2 === 0 ? -42 : 42;
           this.time.delayedCall(180, () => {
-            this.spawnEnemy(
+            const extraSpawned = this.spawnEnemy(
               'zombie',
               `${spawn.id}-extra`,
               door?.x ?? spawn.x + duplicateOffset,
@@ -3263,6 +3287,9 @@ export class BattleScene extends Phaser.Scene {
               Phaser.Math.Clamp(spawn.x + duplicateOffset, 48, (this.stage?.worldWidth ?? 2600) - 48),
               Phaser.Math.Clamp(spawn.y + (index % 3 - 1) * 34, 60, (this.stage?.worldHeight ?? 920) - 60),
             );
+            if (!extraSpawned) {
+              state.remaining = Math.max(0, state.remaining - 1);
+            }
           });
         }
       });
@@ -3653,7 +3680,9 @@ export class BattleScene extends Phaser.Scene {
     };
 
     for (const enemy of this.enemies) {
-      if (enemy.alive) {
+      // Skip spawn-tweening enemies whose bodies are still disabled — locking
+      // aim onto them sends rounds straight through.
+      if (enemy.alive && (enemy.sprite.body as Phaser.Physics.Arcade.Body).enable) {
         considerTarget(enemy.sprite.x, enemy.sprite.y, 28);
       }
     }
@@ -4235,23 +4264,26 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    // Monotonic ids: two bosses summoning in the same frame previously
+    // produced identical timestamp-based ids, breaking pierce bookkeeping.
+    const wave = ++this.summonCounter;
     if (boss.config.kind === 'gunship') {
-      this.spawnEnemy('rifleman', `support-${this.time.now}-a`, this.stage.worldWidth - 340, 520, 'boss-support');
-      this.spawnEnemy('rifleman', `support-${this.time.now}-b`, this.stage.worldWidth - 280, 620, 'boss-support');
+      this.spawnEnemy('rifleman', `support-${wave}-a`, this.stage.worldWidth - 340, 520, 'boss-support');
+      this.spawnEnemy('rifleman', `support-${wave}-b`, this.stage.worldWidth - 280, 620, 'boss-support');
       this.showBanner('Gunship dropping reinforcements', '#ffb188');
       return;
     }
 
     if (boss.config.kind === 'barge') {
-      this.spawnEnemy('rocketeer', `support-${this.time.now}-a`, this.stage.worldWidth - 340, 260, 'boss-support');
-      this.spawnEnemy('rifleman', `support-${this.time.now}-b`, this.stage.worldWidth - 290, 720, 'boss-support');
+      this.spawnEnemy('rocketeer', `support-${wave}-a`, this.stage.worldWidth - 340, 260, 'boss-support');
+      this.spawnEnemy('rifleman', `support-${wave}-b`, this.stage.worldWidth - 290, 720, 'boss-support');
       this.showBanner('River armor dispatching support', '#a4faf8');
       return;
     }
 
-    this.spawnEnemy('rifleman', `support-${this.time.now}-a`, this.stage.worldWidth - 430, 240, 'boss-support');
-    this.spawnEnemy('rifleman', `support-${this.time.now}-b`, this.stage.worldWidth - 430, 720, 'boss-support');
-    this.spawnEnemy('rocketeer', `support-${this.time.now}-c`, this.stage.worldWidth - 350, 470, 'boss-support');
+    this.spawnEnemy('rifleman', `support-${wave}-a`, this.stage.worldWidth - 430, 240, 'boss-support');
+    this.spawnEnemy('rifleman', `support-${wave}-b`, this.stage.worldWidth - 430, 720, 'boss-support');
+    this.spawnEnemy('rocketeer', `support-${wave}-c`, this.stage.worldWidth - 350, 470, 'boss-support');
     this.showBanner('Command tank calling elite guard', '#ff9c75');
   }
 
@@ -4461,9 +4493,17 @@ export class BattleScene extends Phaser.Scene {
 
   private handleWeaponPickup(playerObject: Phaser.GameObjects.GameObject, pickupObject: Phaser.GameObjects.GameObject): void {
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
+    if (!player) {
+      return;
+    }
+
+    this.grantWeaponPickup(player, pickupObject);
+  }
+
+  private grantWeaponPickup(player: PlayerUnit, pickupObject: Phaser.GameObjects.GameObject): void {
     const pickup = pickupObject as Phaser.GameObjects.Rectangle;
     const weaponKind = pickup.getData('weaponKind') as WeaponKind | undefined;
-    if (!player || !player.alive || !weaponKind) {
+    if (!player.alive || !weaponKind || !pickup.active) {
       return;
     }
 
@@ -4501,8 +4541,16 @@ export class BattleScene extends Phaser.Scene {
 
   private handleHealthPickup(playerObject: Phaser.GameObjects.GameObject, pickupObject: Phaser.GameObjects.GameObject): void {
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
+    if (!player) {
+      return;
+    }
+
+    this.grantHealthPickup(player, pickupObject);
+  }
+
+  private grantHealthPickup(player: PlayerUnit, pickupObject: Phaser.GameObjects.GameObject): void {
     const pickup = pickupObject as Phaser.GameObjects.Rectangle;
-    if (!player || !player.alive || player.health >= player.maxHealth) {
+    if (!player.alive || !pickup.active || player.health >= player.maxHealth) {
       return;
     }
 
@@ -4517,13 +4565,21 @@ export class BattleScene extends Phaser.Scene {
 
   private handleAirStrikePickup(playerObject: Phaser.GameObjects.GameObject, pickupObject: Phaser.GameObjects.GameObject): void {
     const player = playerObject.getData('actor') as PlayerUnit | undefined;
+    if (!player) {
+      return;
+    }
+
+    this.grantAirStrikePickup(player, pickupObject);
+  }
+
+  private grantAirStrikePickup(player: PlayerUnit, pickupObject: Phaser.GameObjects.GameObject): void {
     const pickup = pickupObject as Phaser.GameObjects.Rectangle;
-    if (!player || !player.alive || !pickup.active) {
+    if (!player.alive || !pickup.active) {
       return;
     }
 
     const bombCount = Number(pickup.getData('bombCount') ?? 1);
-    player.bombs = Math.min(12, player.bombs + bombCount);
+    player.bombs = Math.min(MAX_BOMBS, player.bombs + bombCount);
     const linkedObjects = pickup.getData('linkedObjects') as Phaser.GameObjects.GameObject[] | undefined;
     linkedObjects?.forEach((object) => object.destroy());
     pickup.destroy();
@@ -4696,6 +4752,10 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private damageEnemy(enemy: EnemyUnit, amount: number): void {
+    if (this.stageOutcome !== 'active') {
+      return;
+    }
+
     enemy.health -= amount;
     this.flashSprite(enemy.sprite);
     this.setEnemyVisualTint(enemy, 'hit');
@@ -4734,17 +4794,23 @@ export class BattleScene extends Phaser.Scene {
       ease: 'Quad.easeOut',
       onComplete: () => enemy.sprite.destroy(),
     });
-    this.director.addScore(enemy.kind === 'tankRaider' ? 360 : enemy.kind === 'jeepRaider' ? 240 : enemy.kind === 'bikeRaider' ? 150 : enemy.kind === 'zombie' ? 45 : enemy.kind === 'turret' ? 180 : enemy.kind === 'rocketeer' ? 140 : 100);
+    this.director.addScore(ENEMY_STATS[enemy.kind].score);
 
     const encounter = this.encounterStates.find((state) => state.config.id === enemy.encounterId);
     if (encounter) {
       encounter.remaining = Math.max(0, encounter.remaining - 1);
     }
 
-    this.emitHud('live');
+    if (this.playing) {
+      this.emitHud('live');
+    }
   }
 
   private damageBoss(boss: BossUnit, amount: number): void {
+    if (this.stageOutcome !== 'active') {
+      return;
+    }
+
     boss.health -= amount;
     this.flashSprite(boss.sprite);
     this.setBossVisualTint(boss, 'hit');
@@ -4772,17 +4838,24 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.playing = false;
+    this.stageOutcome = 'cleared';
     this.showBanner('Bosses down. Stage clear.', '#f5e4a1');
     this.cameras.main.shake(240, 0.008);
     this.physics.pause();
 
     this.time.delayedCall(1100, () => {
-      this.director.completeCurrentStage();
-      this.emitHud('paused');
+      if (this.stageOutcome === 'cleared') {
+        this.director.completeCurrentStage();
+        this.emitHud('paused');
+      }
     });
   }
 
   private damagePlayer(player: PlayerUnit, amount: number): void {
+    if (this.stageOutcome !== 'active') {
+      return;
+    }
+
     player.health -= amount;
     this.flashSprite(player.sprite);
     this.cameras.main.shake(90, 0.003);
@@ -4793,6 +4866,7 @@ export class BattleScene extends Phaser.Scene {
 
     player.alive = false;
     player.health = 0;
+    player.shadow.setVisible(false);
     player.sprite.disableBody(true, true);
     this.showBanner(`${player.label} is down`, player.accent);
 
@@ -4801,11 +4875,14 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.playing = false;
+    this.stageOutcome = 'failed';
     this.activeEncounterLabel = 'Mission failed';
     this.physics.pause();
     this.time.delayedCall(900, () => {
-      this.director.failMission();
-      this.emitHud('paused');
+      if (this.stageOutcome === 'failed') {
+        this.director.failMission();
+        this.emitHud('paused');
+      }
     });
   }
 
@@ -5248,6 +5325,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.pushHud({
       phase,
+      stageOutcome: this.stageOutcome,
       stageName: stage.codename,
       stageIndex: snapshot.currentStageIndex + 1,
       totalStages: snapshot.stages.length,
@@ -5265,7 +5343,8 @@ export class BattleScene extends Phaser.Scene {
         health: player.health,
         maxHealth: player.maxHealth,
         bombs: player.bombs,
-        bombCooldownMs: Math.max(0, Math.ceil(player.nextSpecialAt - this.time.now)),
+        // Quantized to 100ms so HUD render signatures don't churn every emit.
+        bombCooldownMs: Math.max(0, Math.ceil((player.nextSpecialAt - this.time.now) / 100) * 100),
         alive: player.alive,
         accent: player.accent,
         weapon: this.getCurrentWeapon(player).label,

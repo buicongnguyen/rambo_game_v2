@@ -92,6 +92,8 @@ export interface BossStatus {
 
 export interface HudSnapshot {
   phase: 'standby' | 'live' | 'paused';
+  /** One-way per-stage latch; UI hides stage-skip once an ending is decided. */
+  stageOutcome: 'active' | 'cleared' | 'failed';
   stageName: string;
   stageIndex: number;
   totalStages: number;

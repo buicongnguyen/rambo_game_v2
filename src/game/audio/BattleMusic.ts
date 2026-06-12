@@ -43,6 +43,7 @@ export class BattleMusic {
   private schedulerId?: number;
   private nextStepTime = 0;
   private stepIndex = 0;
+  private visibilityHooked = false;
 
   start(): void {
     const context = this.ensureContext();
@@ -52,11 +53,39 @@ export class BattleMusic {
 
     void context.resume();
 
+    if (!this.visibilityHooked) {
+      // Browsers throttle background-tab intervals to >=1s, which starves the
+      // 0.22s lookahead and chops the music; suspend instead of stuttering.
+      this.visibilityHooked = true;
+      document.addEventListener('visibilitychange', () => this.handleVisibilityChange());
+    }
+
     if (!this.schedulerId) {
       this.nextStepTime = context.currentTime + 0.04;
       this.stepIndex = 0;
       this.schedulerId = window.setInterval(() => this.schedule(), SCHEDULE_INTERVAL_MS);
       this.schedule();
+    }
+  }
+
+  stop(): void {
+    if (this.schedulerId) {
+      window.clearInterval(this.schedulerId);
+      this.schedulerId = undefined;
+    }
+
+    void this.context?.suspend();
+  }
+
+  private handleVisibilityChange(): void {
+    if (!this.context) {
+      return;
+    }
+
+    if (document.hidden) {
+      void this.context.suspend();
+    } else if (this.schedulerId) {
+      void this.context.resume();
     }
   }
 
@@ -66,7 +95,9 @@ export class BattleMusic {
     }
 
     const audioWindow = window as WindowWithWebAudio;
-    const AudioContextCtor = AudioContext ?? audioWindow.webkitAudioContext;
+    // Read AudioContext off window: a bare identifier would throw a
+    // ReferenceError on engines where only webkitAudioContext exists.
+    const AudioContextCtor = window.AudioContext ?? audioWindow.webkitAudioContext;
     if (!AudioContextCtor) {
       return undefined;
     }
