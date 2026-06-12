@@ -4792,7 +4792,12 @@ export class BattleScene extends Phaser.Scene {
       angle: enemy.sprite.angle + 18,
       duration: 420,
       ease: 'Quad.easeOut',
-      onComplete: () => enemy.sprite.destroy(),
+      onComplete: () => {
+        enemy.sprite.destroy();
+        // Drop the carcass from the roster — boss summons would otherwise
+        // grow the array (and every AI/aim scan) without bound.
+        this.enemies = this.enemies.filter((entry) => entry !== enemy);
+      },
     });
     this.director.addScore(ENEMY_STATS[enemy.kind].score);
 
