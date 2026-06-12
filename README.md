@@ -65,6 +65,24 @@ npm install
 npm run dev
 ```
 
+## Android Phone Build
+
+This project uses Capacitor to package the Vite/Phaser game as a native Android app.
+
+```bash
+npm install
+npm run android:sync
+npm run android:run
+```
+
+For a physical phone, enable Developer Options, enable USB debugging, connect the phone over USB, accept the RSA debugging prompt, then run `npm run android:run`. To work from Android Studio instead, run `npm run android:open`.
+
+Command-line Android builds need Java and the Android SDK available to Gradle. If Gradle reports that `JAVA_HOME` is missing, set `JAVA_HOME` to your installed JDK or run through Android Studio.
+
+The Android app id is `com.operationironvengeance.game`, with bundled web assets copied from `dist`.
+
+See [docs/ANDROID_LOCAL_SETUP.md](/C:/Users/n/source/repos/rambo_game/docs/ANDROID_LOCAL_SETUP.md) for APK build, phone install, emulator, and GitHub Release download instructions.
+
 ## Next Production Steps
 
 - Replace generated shapes with authored pixel art and sprite animation
