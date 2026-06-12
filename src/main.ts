@@ -17,10 +17,10 @@ app.innerHTML = `
     <header class="masthead">
       <div>
         <span class="eyebrow">Nintendo-style military run-and-gun</span>
-        <h1>Operation Iron Vengeance</h1>
+        <h1>Operation Iron Vengeance V2</h1>
       </div>
       <p>
-        A staged co-op commando prototype built from the brief: jungle assault, enemy waves,
+        Version 2: rebuilt physics, background, and game logic. Jungle assault, enemy waves,
         and a boss at the end of every mission.
       </p>
     </header>

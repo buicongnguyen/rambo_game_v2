@@ -348,10 +348,10 @@ export class InterfaceController {
     if (snapshot.phase === 'menu') {
       return `
         <section class="overlay-card">
-          <span class="overlay-kicker">Retro Commando Prototype</span>
-          <h1>Operation Iron Vengeance</h1>
+          <span class="overlay-kicker">Retro Commando Prototype - V2</span>
+          <h1>Operation Iron Vengeance V2</h1>
           <p>
-            Your brief points closer to Contra, Ikari Warriors, Mercs, and Metal Slug than the original NES Rambo.
+            Version 2 rebuilds the physics, background rendering, and stage logic.
             Shadow Squad mode keeps mobile play single-stick friendly while rescued soldiers follow, ride, and fight with you.
           </p>
           ${this.renderDifficultySelector()}
