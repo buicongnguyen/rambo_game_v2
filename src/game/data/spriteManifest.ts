@@ -50,19 +50,6 @@ export function animationKey(texture: string): string {
   return `anim-${texture}`;
 }
 
-export function getStageThemeById(stageId: string): StageThemeId {
-  switch (stageId) {
-    case 'emerald-killbox':
-      return 'emerald';
-    case 'river-run':
-      return 'river';
-    case 'blacksite-siege':
-      return 'blacksite';
-    default:
-      return 'emerald';
-  }
-}
-
 export function getEnemyTextureKey(theme: StageThemeId, kind: EnemyKind, action: 'stand' | 'fire'): string {
   const textureKind = kind === 'zombie' || kind === 'scout' || kind === 'bikeRaider' || kind === 'jeepRaider' || kind === 'tankRaider'
     ? 'rifleman'

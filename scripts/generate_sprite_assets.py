@@ -9,7 +9,11 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Stitched strips ship with the game; per-frame dumps and contact sheets are
+# working references only and must stay out of public/ (everything in public/
+# is copied verbatim into dist and the Android APK).
 OUT_ROOT = ROOT / "public" / "assets" / "sprites"
+REVIEW_ROOT = ROOT / "assets_src" / "sprites"
 
 PLAYER_LOGICAL = (32, 32)
 PLAYER_SCALE = 2
@@ -451,9 +455,9 @@ def save_preview(frames: list[Image.Image], out_path: Path, columns: int = 4) ->
 def build_player_assets() -> None:
     for action in PLAYER_POSES:
         frames = draw_commando_frames(action)
-        save_frames(frames, OUT_ROOT / "player" / action)
+        save_frames(frames, REVIEW_ROOT / "player" / action)
         save_strip(frames, OUT_ROOT / "player" / f"commando_{action}.png")
-        save_preview(frames, OUT_ROOT / "previews" / "player" / f"{action}.png")
+        save_preview(frames, REVIEW_ROOT / "previews" / "player" / f"{action}.png")
 
 
 def build_enemy_assets() -> None:
@@ -461,15 +465,15 @@ def build_enemy_assets() -> None:
         for kind in ("rifleman", "rocketeer"):
             for action in ("stand", "fire"):
                 frames = draw_enemy_frames(theme, kind, action)
-                save_frames(frames, OUT_ROOT / "enemies" / theme / kind / action)
+                save_frames(frames, REVIEW_ROOT / "enemies" / theme / kind / action)
                 save_strip(frames, OUT_ROOT / "enemies" / f"{theme}_{kind}_{action}.png")
-                save_preview(frames, OUT_ROOT / "previews" / "enemies" / f"{theme}_{kind}_{action}.png")
+                save_preview(frames, REVIEW_ROOT / "previews" / "enemies" / f"{theme}_{kind}_{action}.png")
 
         for action in ("stand", "fire"):
             turret_frames = draw_turret_frames(theme, action)
-            save_frames(turret_frames, OUT_ROOT / "enemies" / theme / "turret" / action)
+            save_frames(turret_frames, REVIEW_ROOT / "enemies" / theme / "turret" / action)
             save_strip(turret_frames, OUT_ROOT / "enemies" / f"{theme}_turret_{action}.png")
-            save_preview(turret_frames, OUT_ROOT / "previews" / "enemies" / f"{theme}_turret_{action}.png")
+            save_preview(turret_frames, REVIEW_ROOT / "previews" / "enemies" / f"{theme}_turret_{action}.png")
 
 
 def build_boss_assets() -> None:
@@ -486,9 +490,9 @@ def build_boss_assets() -> None:
     for boss_kind, builder in boss_builders.items():
         theme = theme_by_boss[boss_kind]
         frames = builder(theme)
-        save_frames(frames, OUT_ROOT / "bosses" / boss_kind / "fire")
+        save_frames(frames, REVIEW_ROOT / "bosses" / boss_kind / "fire")
         save_strip(frames, OUT_ROOT / "bosses" / f"{boss_kind}_fire.png")
-        save_preview(frames, OUT_ROOT / "previews" / "bosses" / f"{boss_kind}_fire.png", columns=3)
+        save_preview(frames, REVIEW_ROOT / "previews" / "bosses" / f"{boss_kind}_fire.png", columns=3)
 
 
 def main() -> None:
