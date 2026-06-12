@@ -56,34 +56,84 @@ const ui = new InterfaceController(
 );
 touchControls = new TouchControlsOverlay(touchControlsRoot, director, virtualGamepad);
 
-new Phaser.Game({
-  type: Phaser.AUTO,
-  parent: 'game-root',
-  backgroundColor: '#0a0f0b',
-  width: 1280,
-  height: 720,
-  physics: {
-    default: 'arcade',
-    arcade: {
-      gravity: { x: 0, y: 0 },
-      // 120Hz fixed physics step halves per-step bullet travel so fast
-      // rounds (sniper ~1000px/s boosted) cannot tunnel through thin cover.
-      fps: 120,
-      debug: false,
-    },
-  },
-  scale: {
-    mode: Phaser.Scale.RESIZE,
-    autoCenter: Phaser.Scale.CENTER_BOTH,
+let game: Phaser.Game | undefined;
+
+const bootGame = (): void => {
+  if (game) {
+    return;
+  }
+
+  game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: 'game-root',
+    backgroundColor: '#0a0f0b',
     width: 1280,
     height: 720,
-  },
-  render: {
-    pixelArt: false,
-    antialias: true,
-  },
-  scene: [new BattleScene(director, (snapshot) => {
-    ui.setHud(snapshot);
-    touchControls?.setHud(snapshot);
-  }, virtualGamepad)],
-});
+    physics: {
+      default: 'arcade',
+      arcade: {
+        gravity: { x: 0, y: 0 },
+        // 120Hz fixed physics step halves per-step bullet travel so fast
+        // rounds (sniper ~1000px/s boosted) cannot tunnel through thin cover.
+        fps: 120,
+        debug: false,
+      },
+    },
+    scale: {
+      mode: Phaser.Scale.RESIZE,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+      width: 1280,
+      height: 720,
+    },
+    render: {
+      pixelArt: false,
+      antialias: true,
+    },
+    scene: [new BattleScene(director, (snapshot) => {
+      ui.setHud(snapshot);
+      touchControls?.setHud(snapshot);
+    }, virtualGamepad)],
+  });
+
+  if (import.meta.env.DEV) {
+    // Dev-only handle for console diagnostics and renderer snapshots.
+    (window as Window & { __ironVengeance?: Phaser.Game }).__ironVengeance = game;
+  }
+};
+
+// Phaser's ScaleManager only watches window resizes, but the game root is
+// CSS-driven (svh units, aspect-ratio): it can change size with no window
+// resize at all. Worse, booting while the root measures 0x0 (hidden tab,
+// embedded webview, prerender) wedges the renderer with a 0x0 buffer it never
+// recovers from — so wait for a real size before creating the game, and
+// refresh the scale manager on any later element resize.
+const gameRoot = document.querySelector<HTMLElement>('#game-root');
+if (!gameRoot) {
+  throw new Error('Game root not found.');
+}
+
+const hasRealSize = (): boolean => {
+  const rect = gameRoot.getBoundingClientRect();
+  return rect.width >= 2 && rect.height >= 2;
+};
+
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => {
+    if (!hasRealSize()) {
+      return;
+    }
+
+    if (!game) {
+      bootGame();
+      return;
+    }
+
+    game.scale.refresh();
+  }).observe(gameRoot);
+
+  if (hasRealSize()) {
+    bootGame();
+  }
+} else {
+  bootGame();
+}

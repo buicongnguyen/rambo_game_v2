@@ -1,71 +1,91 @@
-# Operation Iron Vengeance
+# Operation Iron Vengeance — V2
 
-A browser-based retro run-and-gun prototype inspired by jungle-era military shooters on Nintendo and arcades.
+A browser-based retro run-and-gun built with Phaser 3.90 + TypeScript, inspired by jungle-era
+military shooters (`Contra`, `Ikari Warriors`, `Mercs`, `Metal Slug`). This is **version 2** of
+[rambo_game](https://github.com/buicongnguyen/rambo_game): same nine-stage campaign, rebuilt
+physics, rendering, and game-state logic.
 
-Research checked on April 28, 2026.
+## What's new in V2
 
-## Design Direction
+Research and the full plan live in [docs/V2_PLAN.md](docs/V2_PLAN.md). Highlights:
 
-The original NES `Rambo` is a single-player action-adventure with bosses, not a stage-based co-op shooter. For the game you described, the stronger gameplay DNA is:
+### Physics rebuilt on the engine
+- Bullets carry real arcade-body velocity integrated on a **120Hz fixed physics step** instead of
+  being teleported per frame — no more tunneling through walls at low FPS, and trajectories are
+  identical at 30/60/144Hz (drop, wind, and boost zones are expressed as px/s velocity shaping).
+- Compact square bullet hitboxes replace 28x5 slivers that never rotated with travel direction.
+- Vehicle exits compute clearance from body extents — v1's fixed 42px offset landed inside
+  jeep/tank hitboxes and instantly re-boarded, permanently trapping the player.
+- Jump is a real dodge: airborne i-frames against bullets and contact, a sine arc with a ground
+  shadow, and vaulting damages soft cover instead of deleting it for free.
+- Terrain (water/holes/high ground) slows enemies, allies, and vehicles — not just players.
+- Hitboxes match visuals: tank raiders 80x48 world-space (was ~49x27), bosses sized to their
+  drawn hulls (was a uniform 72x40 sliver).
 
-- `Contra`: simultaneous one or two-player run-and-gun action, stage progression, and boss battles.
-- `Ikari Warriors`: military commando fantasy, overhead assault flow, tanks, helicopters, and co-op pressure.
-- `Mercs`: checkpoint-style battlefield pushes with escalating military hardware.
-- `Metal Slug`: clean controls, dramatic boss silhouettes, and readable enemy waves.
+### Background and camera fixed for good
+- The backdrop paints exactly the world rectangle and a **zoom floor guarantees the camera can
+  never see outside the painted world at any window size** — the v1 "background void after
+  resize" bug class is closed by invariant, not by patches.
+- Two parallax tile layers per theme add depth using the device-independent tilePosition pattern.
+- Overlay text counter-scales against camera zoom (no more breathing objective plaque).
+- The game boots only once its root element has a real size, and a ResizeObserver keeps the scale
+  manager honest — CSS-driven layouts can resize without window events.
 
-Reference links:
+### Game-state hardening
+- A one-way stage-outcome latch ends the v1 race where a lingering poison tick could flip
+  "Mission Failed" into "Stage Clear" (or vice versa); the director rejects stale transitions.
+- Rescue bunkers actually work now (a solid collider had made the rescue overlap unreachable —
+  Shadow Squad's core mechanic was dead in v1).
+- Lasers stop at the first obstacle; splash damage no longer double-dips the direct target;
+  hit-flashes restore identity tints; zone-clear rewards no longer confiscate stockpiled bombs.
+- Enemy spawns relocate out of cover; per-kind tuning lives in one data table
+  ([src/game/data/enemyStats.ts](src/game/data/enemyStats.ts)).
+- The DOM HUD builds once and patches values in place (v1 rebuilt innerHTML up to ~8x/s and ate
+  Skip-button taps mid-press).
 
-- [Rambo (1987 NES) on Wikipedia](https://en.wikipedia.org/wiki/Rambo_%281987_video_game%29)
-- [Contra (1987) on Wikipedia](https://en.wikipedia.org/wiki/Contra_%28video_game%29)
-- [Ikari Warriors on Wikipedia](https://en.wikipedia.org/wiki/Ikari_Warriors)
-- [Mercs on Wikipedia](https://en.wikipedia.org/wiki/Mercs)
-- [Metal Slug on SNK](https://www.snk-corp.co.jp/us/games/acaneogeo/metalslug/)
-
-## Plan
-
-1. Lock the fantasy around elite commandos cutting through enemy strongholds in short, high-pressure stages.
-2. Use a 2D Phaser + TypeScript stack for fast iteration on combat, cameras, and enemy waves.
-3. Build three prototype stages with unique palettes, enemy encounter gates, and a boss at the end of each stage.
-4. Support local solo and local two-player play with clear keyboard bindings and shared screen camera logic.
-5. Keep the playfield in canvas and the HUD, menus, and mission prompts in the DOM for readability.
-6. Ship the prototype with placeholder art, then expand with sprite sheets, audio, pickups, and richer boss patterns.
-
-## What Is Implemented
-
-- Three staged missions with distinct briefings and bosses
-- Solo or local two-player mission start
-- Top-down commando movement and auto-targeted shooting
-- Generated commando sprite animations for idle, walk, run, crawl, kneel, jump, and firing
-- Per-stage enemy sprite sets for riflemen, rocketeers, and turrets
-- Stage-specific boss firing sheets for the gunship, barge, and command tank
-- Barrage special attacks with limited charges
-- Enemy waves, turrets, rocketeers, and boss reinforcements
-- Stage clear, game over, and campaign complete overlays
-- Responsive HUD and a short in-game design brief
-
-## Sprite Assets
-
-Generated sprite sheets live in [public/assets/sprites](/C:/Users/n/source/repos/rambo_game/public/assets/sprites).
-
-- Player strips: [public/assets/sprites/player](/C:/Users/n/source/repos/rambo_game/public/assets/sprites/player)
-- Enemy stage variants: [public/assets/sprites/enemies](/C:/Users/n/source/repos/rambo_game/public/assets/sprites/enemies)
-- Boss strips: [public/assets/sprites/bosses](/C:/Users/n/source/repos/rambo_game/public/assets/sprites/bosses)
-- Preview contact sheets: [public/assets/sprites/previews](/C:/Users/n/source/repos/rambo_game/public/assets/sprites/previews)
-
-To regenerate the asset pack:
+### Tests
+24 vitest unit tests cover the extracted combat math (vehicle-exit clearance, segment clipping,
+frame-rate-independent smoothing, the camera zoom floor) and stage-data invariants (trigger
+ordering, spawn bounds, boss config consistency).
 
 ```bash
-python scripts/generate_sprite_assets.py
+npm test
 ```
 
-## Run It
+## What is implemented
+
+- Nine staged missions with distinct briefings, bosses, and dual-boss finales
+- Solo or Shadow Squad mode (rescue AI soldiers who follow, ride along, and fight)
+- Top-down commando movement, auto-targeted shooting, 11 weapons with ammo pickups
+- Enterable jeeps, tanks, and motorcycles with mounted weapons
+- Enemy waves, turrets, rocketeers, scouts, zombies, and vehicle raiders
+- Terrain effects, bullet-physics field zones, destructible cover with rewards
+- Air-strike specials, stage clear / game over / campaign overlays, responsive HUD
+- Touch controls with a virtual stick for mobile play
+
+## Run it
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Android Phone Build
+Build for production (also type-checks):
+
+```bash
+npm run build
+```
+
+## Sprite assets
+
+Generated sprite strips ship in `public/assets/sprites`. Per-frame dumps and preview contact
+sheets are working references only and live in `assets_src/sprites`. Regenerate the pack with:
+
+```bash
+python scripts/generate_sprite_assets.py
+```
+
+## Android phone build
 
 This project uses Capacitor to package the Vite/Phaser game as a native Android app.
 
@@ -75,17 +95,29 @@ npm run android:sync
 npm run android:run
 ```
 
-For a physical phone, enable Developer Options, enable USB debugging, connect the phone over USB, accept the RSA debugging prompt, then run `npm run android:run`. To work from Android Studio instead, run `npm run android:open`.
+For a physical phone, enable Developer Options and USB debugging, connect over USB, accept the
+RSA prompt, then run `npm run android:run`. To work from Android Studio instead, run
+`npm run android:open`. Command-line builds need Java and the Android SDK available to Gradle.
 
-Command-line Android builds need Java and the Android SDK available to Gradle. If Gradle reports that `JAVA_HOME` is missing, set `JAVA_HOME` to your installed JDK or run through Android Studio.
+The Android app id is `com.operationironvengeance.game`, with bundled web assets copied from
+`dist`. See [docs/ANDROID_LOCAL_SETUP.md](docs/ANDROID_LOCAL_SETUP.md) for APK build, install,
+emulator, and GitHub Release instructions.
 
-The Android app id is `com.operationironvengeance.game`, with bundled web assets copied from `dist`.
+## Design direction (from v1)
 
-See [docs/ANDROID_LOCAL_SETUP.md](/C:/Users/n/source/repos/rambo_game/docs/ANDROID_LOCAL_SETUP.md) for APK build, phone install, emulator, and GitHub Release download instructions.
+The original NES `Rambo` is a single-player action-adventure; the stronger gameplay DNA for this
+brief is `Contra` (stage pressure and bosses), `Ikari Warriors` and `Mercs` (military top-down
+assault flow), and `Metal Slug` (readable chaos and boss silhouettes).
 
-## Next Production Steps
+- [Rambo (1987 NES) on Wikipedia](https://en.wikipedia.org/wiki/Rambo_%281987_video_game%29)
+- [Contra (1987) on Wikipedia](https://en.wikipedia.org/wiki/Contra_%28video_game%29)
+- [Ikari Warriors on Wikipedia](https://en.wikipedia.org/wiki/Ikari_Warriors)
+- [Mercs on Wikipedia](https://en.wikipedia.org/wiki/Mercs)
+- [Metal Slug on SNK](https://www.snk-corp.co.jp/us/games/acaneogeo/metalslug/)
+
+## Next production steps
 
 - Replace generated shapes with authored pixel art and sprite animation
-- Add pickups, weapon upgrades, and destructible scenery
-- Layer in music, hit SFX, and pause/settings screens
-- Add gamepad support and a continue system
+- True simultaneous local two-player (Shadow Squad mode is the current co-op offering)
+- Object pooling for projectiles; gamepad support; pause/settings screens
+- Phaser 4 migration once the prototype stabilizes
