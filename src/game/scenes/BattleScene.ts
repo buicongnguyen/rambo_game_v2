@@ -853,16 +853,28 @@ export class BattleScene extends Phaser.Scene {
    * the camera, giving depth without any viewport-dependent sizing (the
    * scrollFactor approach is device-dependent — phaser#6128).
    */
+  // Key parallax textures by the palette colors they bake in, not by theme:
+  // same-theme stages ship different shadow/accent tints, and these canvas
+  // textures persist for the whole session, so a theme key would freeze the
+  // first stage's colors onto every later same-theme stage.
+  private parallaxTextureKeys(stage: StageConfig): { far: string; near: string } {
+    return {
+      far: `parallax-far-${stage.palette.shadow.toString(16)}`,
+      near: `parallax-near-${stage.palette.accent.toString(16)}`,
+    };
+  }
+
   private createParallaxLayers(stage: StageConfig): void {
     this.parallaxLayers = [];
     this.ensureParallaxTextures(stage);
+    const keys = this.parallaxTextureKeys(stage);
 
     const far = this.add.tileSprite(
       stage.worldWidth * 0.5,
       stage.worldHeight * 0.5,
       stage.worldWidth,
       stage.worldHeight,
-      `parallax-far-${stage.theme}`,
+      keys.far,
     );
     far.setDepth(-38);
     far.setAlpha(0.5);
@@ -873,7 +885,7 @@ export class BattleScene extends Phaser.Scene {
       stage.worldHeight * 0.5,
       stage.worldWidth,
       stage.worldHeight,
-      `parallax-near-${stage.theme}`,
+      keys.near,
     );
     near.setDepth(-36);
     near.setAlpha(0.42);
@@ -881,6 +893,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private ensureParallaxTextures(stage: StageConfig): void {
+    const keys = this.parallaxTextureKeys(stage);
     const toCss = (tint: number, alpha: number): string => {
       const r = (tint >> 16) & 0xff;
       const g = (tint >> 8) & 0xff;
@@ -888,7 +901,7 @@ export class BattleScene extends Phaser.Scene {
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     };
 
-    const farKey = `parallax-far-${stage.theme}`;
+    const farKey = keys.far;
     if (!this.textures.exists(farKey)) {
       const size = 256;
       const texture = this.textures.createCanvas(farKey, size, size);
@@ -908,7 +921,7 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
-    const nearKey = `parallax-near-${stage.theme}`;
+    const nearKey = keys.near;
     if (!this.textures.exists(nearKey)) {
       const size = 192;
       const texture = this.textures.createCanvas(nearKey, size, size);
@@ -1668,7 +1681,9 @@ export class BattleScene extends Phaser.Scene {
       stroke: '#102027',
       strokeThickness: 4,
     }).setOrigin(0.5).setDepth(11);
-    body.setData('linkedObjects', [roof, door, light, barsA, barsB, marker]);
+    // The RescueBunker struct (below) owns cleanup; the bunker never enters the
+    // obstacle/destructible paths that read getData('linkedObjects'), so no
+    // setData mirror here (it would double-track the marker).
 
     this.rescueBunkers.push({
       id,
@@ -4872,6 +4887,11 @@ export class BattleScene extends Phaser.Scene {
     player.alive = false;
     player.health = 0;
     player.shadow.setVisible(false);
+    // Dismount before the body is disabled, or a player killed mid-drive (e.g.
+    // a poison tick) would leave the vehicle stuck "occupied" by a dead driver.
+    if (player.vehicle?.active) {
+      this.exitVehicle(player, false);
+    }
     player.sprite.disableBody(true, true);
     this.showBanner(`${player.label} is down`, player.accent);
 
