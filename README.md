@@ -5,6 +5,8 @@ military shooters (`Contra`, `Ikari Warriors`, `Mercs`, `Metal Slug`). This is *
 [rambo_game](https://github.com/buicongnguyen/rambo_game): same nine-stage campaign, rebuilt
 physics, rendering, and game-state logic.
 
+> **Version 3 is out — [play it](https://buicongnguyen.github.io/rambo_game_v3/) · [repo](https://github.com/buicongnguyen/rambo_game_v3).** v3 adds arcade sound, combos & rank, a pause/settings menu, extra juice, and gamepad support on this v2 engine.
+
 ## What's new in V2
 
 Research and the full plan live in [docs/V2_PLAN.md](docs/V2_PLAN.md). Highlights:
